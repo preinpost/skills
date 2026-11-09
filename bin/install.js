@@ -140,7 +140,7 @@ async function prompt(opts, available) {
   const agentIdx = await select(
     "설치 위치",
     names.map((n) => ({ label: n, hint: `${base}/${TARGETS[n]}` })),
-    { multi: true, checked: [0, 1] },
+    { multi: true },
   );
   opts.agents = agentIdx.map((i) => names[i]);
 

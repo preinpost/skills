@@ -14,7 +14,7 @@
 Node 18+만 있으면 된다. 별도 npm 배포 없이 GitHub에서 바로 실행한다.
 
 ```bash
-# TUI로 스킬 · 범위(프로젝트/전역) · 위치(claude/agents/pi) 선택
+# TUI로 스킬 · 범위(프로젝트/전역) · 위치(claude/agents/pi, 직접 체크) 선택
 npx github:preinpost/skills
 
 # 묻지 않고 모든 스킬을 ./.claude/skills, ./.agents/skills 에 설치
