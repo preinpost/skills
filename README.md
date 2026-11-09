@@ -11,15 +11,28 @@
 
 ## 설치
 
-각 스킬 디렉터리를 스킬 검색 경로에 두면 된다.
+Node 18+만 있으면 된다. 별도 npm 배포 없이 GitHub에서 바로 실행한다.
 
 ```bash
-# Pi
-ln -s ~/dev/skills/ko-article-html ~/.pi/agent/skills/ko-article-html
+# TUI로 스킬 · 범위(프로젝트/전역) · 위치(claude/agents/pi) 선택
+npx github:preinpost/skills
 
-# 또는 복사
-cp -R ko-article-html ~/.pi/agent/skills/
+# 묻지 않고 모든 스킬을 ./.claude/skills, ./.agents/skills 에 설치
+npx github:preinpost/skills -y
+
+# 홈(~/.claude/skills, ~/.agents/skills)에 전역 설치
+npx github:preinpost/skills -g
+
+# 특정 스킬만 / 특정 에이전트만 (claude, agents, pi, all)
+npx github:preinpost/skills orchestrator -a claude -g
+npx github:preinpost/skills -a pi -g          # ~/.pi/agent/skills
+
+# 목록 보기, 덮어쓰기
+npx github:preinpost/skills --list
+npx github:preinpost/skills -g --force
 ```
+
+[vercel-labs/skills](https://github.com/vercel-labs/skills) CLI로도 설치할 수 있다: `npx skills add preinpost/skills`
 
 Pi에서 스킬을 수정한 뒤에는 `/reload`로 다시 읽는다.
 
