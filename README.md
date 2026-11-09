@@ -34,6 +34,10 @@ npx github:preinpost/skills -g --force
 
 [vercel-labs/skills](https://github.com/vercel-labs/skills) CLI로도 설치할 수 있다: `npx skills add preinpost/skills`
 
+### 비공개 스킬
+
+비공개 레포 [`preinpost/skills-private`](https://github.com/preinpost/skills-private)에 접근 권한이 있으면(`gh auth login` 또는 SSH 키) 같은 명령으로 그 레포의 스킬도 `🔒`로 함께 표시·설치된다. 권한이 없으면 묻지 않고 건너뛴다. 다른 레포를 쓰려면 `SKILLS_PRIVATE_REPO=owner/repo`, 끄려면 `--no-private`.
+
 Pi에서 스킬을 수정한 뒤에는 `/reload`로 다시 읽는다.
 
 ## 새 스킬 추가

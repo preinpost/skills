@@ -4,8 +4,10 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const readline = require("readline");
+const { spawnSync } = require("child_process");
 
 const ROOT = path.resolve(__dirname, "..");
+const PRIVATE_REPO = process.env.SKILLS_PRIVATE_REPO || "preinpost/skills-private";
 const TARGETS = {
   claude: ".claude/skills",
   agents: ".agents/skills",
@@ -20,6 +22,7 @@ Options:
   -l, --list           설치 가능한 스킬 목록
   -f, --force          이미 있는 스킬 덮어쓰기
   -y, --yes            TUI 없이 기본값으로 설치
+      --no-private     비공개 레포(${PRIVATE_REPO})를 받지 않음
   -h, --help           도움말
 
 Examples:
@@ -28,22 +31,45 @@ Examples:
   npx github:preinpost/skills orchestrator -g     # ~/.claude/skills, ~/.agents/skills 에
   npx github:preinpost/skills -a pi -g            # ~/.pi/agent/skills 에`;
 
-function listSkills() {
-  return fs
-    .readdirSync(ROOT, { withFileTypes: true })
-    .filter((d) => d.isDirectory() && fs.existsSync(path.join(ROOT, d.name, "SKILL.md")))
-    .map((d) => d.name)
-    .sort();
+// Shallow-clone the private repo into a temp dir. Returns null without prompting if there is no access.
+function fetchPrivate() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "skills-private-"));
+  process.on("exit", () => fs.rmSync(dir, { recursive: true, force: true }));
+  const env = { ...process.env, GIT_TERMINAL_PROMPT: "0", GCM_INTERACTIVE: "never", GIT_SSH_COMMAND: "ssh -o BatchMode=yes" };
+  for (const url of [`https://github.com/${PRIVATE_REPO}.git`, `git@github.com:${PRIVATE_REPO}.git`]) {
+    const r = spawnSync("git", ["clone", "-q", "--depth", "1", url, dir], { env, stdio: "ignore", timeout: 30000 });
+    if (r.status === 0) return dir;
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.mkdirSync(dir);
+  }
+  return null;
 }
 
-function describe(name) {
-  const text = fs.readFileSync(path.join(ROOT, name, "SKILL.md"), "utf8");
+// name -> { dir, private }. Private skills win on name clashes.
+function listSkills(roots) {
+  const skills = new Map();
+  for (const { root, private: priv } of roots) {
+    for (const d of fs.readdirSync(root, { withFileTypes: true })) {
+      if (d.isDirectory() && fs.existsSync(path.join(root, d.name, "SKILL.md"))) {
+        skills.set(d.name, { dir: path.join(root, d.name), private: priv });
+      }
+    }
+  }
+  return new Map([...skills].sort(([a], [b]) => a.localeCompare(b)));
+}
+
+function label(name, skill) {
+  return skill.private ? `🔒 ${name}` : name;
+}
+
+function describe(skill) {
+  const text = fs.readFileSync(path.join(skill.dir, "SKILL.md"), "utf8");
   const m = text.match(/^description:\s*['"]?(.*?)['"]?\s*$/m);
   return m ? m[1] : "";
 }
 
 function parseArgs(argv) {
-  const opts = { skills: [], agents: [], global: false, force: false, list: false, help: false, yes: false };
+  const opts = { skills: [], agents: [], global: false, force: false, list: false, help: false, yes: false, private: true };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "-g" || a === "--global") opts.global = true;
@@ -51,6 +77,7 @@ function parseArgs(argv) {
     else if (a === "-l" || a === "--list") opts.list = true;
     else if (a === "-y" || a === "--yes") opts.yes = true;
     else if (a === "-h" || a === "--help") opts.help = true;
+    else if (a === "--no-private") opts.private = false;
     else if (a === "-a" || a === "--agent") opts.agents.push(...String(argv[++i] || "").split(","));
     else if (a.startsWith("-")) throw new Error(`알 수 없는 옵션: ${a}`);
     else opts.skills.push(a);
@@ -122,12 +149,13 @@ function select(question, items, { multi = false, checked = [] } = {}) {
 }
 
 async function prompt(opts, available) {
+  const names = [...available.keys()];
   const skillIdx = await select(
     "설치할 스킬",
-    available.map((s) => ({ label: s })),
-    { multi: true, checked: available.map((_, i) => i) },
+    names.map((n) => ({ label: label(n, available.get(n)) })),
+    { multi: true, checked: names.map((_, i) => i) },
   );
-  opts.skills = skillIdx.map((i) => available[i]);
+  opts.skills = skillIdx.map((i) => names[i]);
 
   const [scope] = await select("설치 범위", [
     { label: "프로젝트", hint: process.cwd() },
@@ -136,13 +164,13 @@ async function prompt(opts, available) {
   opts.global = scope === 1;
 
   const base = opts.global ? "~" : ".";
-  const names = Object.keys(TARGETS);
+  const agents = Object.keys(TARGETS);
   const agentIdx = await select(
     "설치 위치",
-    names.map((n) => ({ label: n, hint: `${base}/${TARGETS[n]}` })),
+    agents.map((n) => ({ label: n, hint: `${base}/${TARGETS[n]}` })),
     { multi: true },
   );
-  opts.agents = agentIdx.map((i) => names[i]);
+  opts.agents = agentIdx.map((i) => agents[i]);
 
   const exists = opts.agents.some((a) =>
     opts.skills.some((s) => fs.existsSync(path.join(opts.global ? os.homedir() : process.cwd(), TARGETS[a], s))),
@@ -156,18 +184,21 @@ async function prompt(opts, available) {
 
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
-  const available = listSkills();
   if (opts.help) return console.log(HELP);
+  const roots = [{ root: ROOT, private: false }];
+  const privateRoot = opts.private && fetchPrivate();
+  if (privateRoot) roots.push({ root: privateRoot, private: true });
+  const available = listSkills(roots);
   if (opts.list) {
-    for (const s of available) console.log(`${s}\n  ${describe(s).slice(0, 120)}`);
+    for (const [n, s] of available) console.log(`${label(n, s)}\n  ${describe(s).slice(0, 120)}`);
     return;
   }
 
   if (opts.interactive && !opts.yes) await prompt(opts, available);
 
-  const skills = opts.skills.length ? opts.skills : available;
-  const missing = skills.filter((s) => !available.includes(s));
-  if (missing.length) throw new Error(`없는 스킬: ${missing.join(", ")} (목록: ${available.join(", ")})`);
+  const skills = opts.skills.length ? opts.skills : [...available.keys()];
+  const missing = skills.filter((s) => !available.has(s));
+  if (missing.length) throw new Error(`없는 스킬: ${missing.join(", ")} (목록: ${[...available.keys()].join(", ")})`);
 
   const base = opts.global ? os.homedir() : process.cwd();
   for (const agent of opts.agents) {
@@ -182,11 +213,11 @@ async function main() {
         }
         fs.rmSync(dest, { recursive: true, force: true });
       }
-      fs.cpSync(path.join(ROOT, skill), dest, {
+      fs.cpSync(available.get(skill).dir, dest, {
         recursive: true,
         filter: (src) => !/(__pycache__|\.pyc$|\.DS_Store$)/.test(src),
       });
-      console.log(`✓ ${dest}`);
+      console.log(`✓ ${dest}${available.get(skill).private ? " 🔒" : ""}`);
     }
   }
 }
