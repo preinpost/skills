@@ -90,7 +90,7 @@ function parseArgs(argv) {
 }
 
 // Minimal arrow-key picker. multi: space toggles, enter confirms. Resolves to selected indices.
-function select(question, items, { multi = false, checked = [] } = {}) {
+function select(question, items, { multi = false, checked = [], allowEmpty = false } = {}) {
   return new Promise((resolve) => {
     const out = process.stdout;
     const on = new Set(checked);
@@ -116,7 +116,7 @@ function select(question, items, { multi = false, checked = [] } = {}) {
       process.stdin.setRawMode(false);
       process.stdin.pause();
       out.write(`\x1b[${lines}A\x1b[0J`);
-      const shown = result.map((i) => items[i].label).join(", ");
+      const shown = result.map((i) => items[i].label).join(", ") || "없음";
       out.write(`\x1b[32m✔\x1b[0m \x1b[1m${question}\x1b[0m \x1b[36m${shown}\x1b[0m\n`);
       resolve(result);
     };
@@ -135,7 +135,7 @@ function select(question, items, { multi = false, checked = [] } = {}) {
         else items.forEach((_, i) => on.add(i));
       } else if (key.name === "return") {
         if (!multi) return done([cur]);
-        if (on.size) return done([...on].sort((a, b) => a - b));
+        if (on.size || allowEmpty) return done([...on].sort((a, b) => a - b));
         error = "하나 이상 선택하세요";
       }
       render();
@@ -149,13 +149,22 @@ function select(question, items, { multi = false, checked = [] } = {}) {
 }
 
 async function prompt(opts, available) {
-  const names = [...available.keys()];
-  const skillIdx = await select(
-    "설치할 스킬",
-    names.map((n) => ({ label: label(n, available.get(n)) })),
-    { multi: true, checked: names.map((_, i) => i) },
-  );
-  opts.skills = skillIdx.map((i) => names[i]);
+  // Public and private skills are picked in separate steps; either step may be left empty.
+  opts.skills = [];
+  for (const priv of [false, true]) {
+    const names = [...available].filter(([, s]) => s.private === priv).map(([n]) => n);
+    if (!names.length) continue;
+    const idx = await select(
+      priv ? "설치할 비공개 스킬" : "설치할 공개 스킬",
+      names.map((n) => ({ label: label(n, available.get(n)) })),
+      { multi: true, checked: names.map((_, i) => i), allowEmpty: true },
+    );
+    opts.skills.push(...idx.map((i) => names[i]));
+  }
+  if (!opts.skills.length) {
+    console.log("선택한 스킬이 없습니다.");
+    process.exit(0);
+  }
 
   const [scope] = await select("설치 범위", [
     { label: "프로젝트", hint: process.cwd() },
