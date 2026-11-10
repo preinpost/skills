@@ -4,10 +4,13 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const readline = require("readline");
+const crypto = require("crypto");
 const { spawnSync } = require("child_process");
 
 const ROOT = path.resolve(__dirname, "..");
 const PRIVATE_REPO = process.env.SKILLS_PRIVATE_REPO || "preinpost/skills-private";
+const META = ".skill-meta.json";
+const IGNORE = /(__pycache__|\.pyc$|\.DS_Store$)/;
 const TARGETS = {
   claude: ".claude/skills",
   agents: ".agents/skills",
@@ -15,12 +18,18 @@ const TARGETS = {
 };
 
 const HELP = `Usage: npx github:preinpost/skills [skill...] [options]
+       npx github:preinpost/skills update [skill...] [options]
+
+Commands:
+  update               설치된 스킬 중 내용(hash)이 바뀐 것만 업데이트
+                       (-g/-a를 안 주면 현재 디렉터리와 ~ 의 claude/agents/pi 를 모두 찾음)
 
 Options:
   -g, --global         홈 디렉터리(~)에 설치 (기본: 현재 디렉터리)
   -a, --agent <name>   설치 대상: ${Object.keys(TARGETS).join(", ")}, all (반복 가능, 기본: claude,agents)
   -l, --list           설치 가능한 스킬 목록
-  -f, --force          이미 있는 스킬 덮어쓰기
+  -f, --force          이미 있는 스킬 무조건 덮어쓰기 (로컬 수정 포함)
+  -c, --check          update에서 바꾸지 않고 상태만 표시
   -y, --yes            TUI 없이 기본값으로 설치
       --no-private     비공개 레포(${PRIVATE_REPO})를 받지 않음
   -h, --help           도움말
@@ -29,7 +38,9 @@ Examples:
   npx github:preinpost/skills                     # TUI로 스킬·위치 선택
   npx github:preinpost/skills -y                  # 모든 스킬을 ./.claude/skills, ./.agents/skills 에
   npx github:preinpost/skills orchestrator -g     # ~/.claude/skills, ~/.agents/skills 에
-  npx github:preinpost/skills -a pi -g            # ~/.pi/agent/skills 에`;
+  npx github:preinpost/skills -a pi -g            # ~/.pi/agent/skills 에
+  npx github:preinpost/skills update              # 바뀐 스킬만 업데이트
+  npx github:preinpost/skills update --check      # 업데이트할 것만 확인`;
 
 // Shallow-clone the private repo into a temp dir. Returns null without prompting if there is no access.
 function fetchPrivate() {
@@ -58,6 +69,63 @@ function listSkills(roots) {
   return new Map([...skills].sort(([a, x], [b, y]) => x.private - y.private || a.localeCompare(b)));
 }
 
+// Content hash of a skill dir: sorted relative paths + file bytes, ignoring build junk and our meta file.
+function hashDir(dir) {
+  const h = crypto.createHash("sha256");
+  const walk = (d) => {
+    for (const e of fs.readdirSync(d, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1))) {
+      const p = path.join(d, e.name);
+      if (IGNORE.test(p) || (d === dir && e.name === META)) continue;
+      if (e.isDirectory()) walk(p);
+      else if (e.isFile()) h.update(`${path.relative(dir, p).split(path.sep).join("/")}\0`).update(fs.readFileSync(p)).update("\0");
+    }
+  };
+  walk(dir);
+  return h.digest("hex").slice(0, 12);
+}
+
+function readMeta(dest) {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(dest, META), "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function copySkill(skill, dest, hash) {
+  fs.rmSync(dest, { recursive: true, force: true });
+  fs.cpSync(skill.dir, dest, { recursive: true, filter: (src) => !IGNORE.test(src) });
+  const meta = { hash, source: skill.private ? PRIVATE_REPO : "preinpost/skills", installedAt: new Date().toISOString() };
+  fs.writeFileSync(path.join(dest, META), JSON.stringify(meta, null, 2) + "\n");
+}
+
+// mode: "update" (바뀐 것만, 로컬 수정은 보호) | "force" | "skip". check=true면 상태만 보고.
+function installSkill(name, skill, dest, { mode, check = false }) {
+  const lock = skill.private ? " 🔒" : "";
+  const src = hashDir(skill.dir);
+  if (!fs.existsSync(dest)) {
+    if (check) return console.log(`+ ${dest} (미설치)`);
+    copySkill(skill, dest, src);
+    return console.log(`✓ ${dest}${lock}`);
+  }
+  if (mode === "skip") return console.log(`- skip  ${dest} (이미 있음)`);
+  const cur = hashDir(dest);
+  const meta = readMeta(dest);
+  if (mode !== "force") {
+    if (cur === src) {
+      if (!check && meta?.hash !== src) copySkill(skill, dest, src); // 메타만 갱신
+      return console.log(`= ${dest} (최신 ${src})`);
+    }
+    if (meta && meta.hash !== cur) {
+      return console.log(`! ${dest} (로컬에서 수정됨, --force로 덮어쓰기)`);
+    }
+  }
+  const from = meta?.hash || cur;
+  if (check) return console.log(`↑ ${dest} (${from} → ${src}, 업데이트 가능)`);
+  copySkill(skill, dest, src);
+  console.log(`↑ ${dest}${lock} (${from} → ${src})`);
+}
+
 function label(name, skill) {
   return skill.private ? `🔒 ${name}` : name;
 }
@@ -69,12 +137,14 @@ function describe(skill) {
 }
 
 function parseArgs(argv) {
-  const opts = { skills: [], agents: [], global: false, force: false, list: false, help: false, yes: false, private: true };
+  const opts = { skills: [], agents: [], global: false, force: false, list: false, help: false, yes: false, private: true, check: false };
+  if (argv[0] === "update") opts.command = argv.shift();
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "-g" || a === "--global") opts.global = true;
     else if (a === "-f" || a === "--force") opts.force = true;
     else if (a === "-l" || a === "--list") opts.list = true;
+    else if (a === "-c" || a === "--check") opts.check = true;
     else if (a === "-y" || a === "--yes") opts.yes = true;
     else if (a === "-h" || a === "--help") opts.help = true;
     else if (a === "--no-private") opts.private = false;
@@ -82,7 +152,8 @@ function parseArgs(argv) {
     else if (a.startsWith("-")) throw new Error(`알 수 없는 옵션: ${a}`);
     else opts.skills.push(a);
   }
-  opts.interactive = argv.length === 0 && process.stdin.isTTY && process.stdout.isTTY;
+  opts.interactive = !opts.command && argv.length === 0 && process.stdin.isTTY && process.stdout.isTTY;
+  opts.explicitAgents = opts.agents.length > 0;
   if (opts.agents.includes("all")) opts.agents = Object.keys(TARGETS);
   if (opts.agents.length === 0) opts.agents = ["claude", "agents"];
   for (const a of opts.agents) if (!TARGETS[a]) throw new Error(`알 수 없는 agent: ${a}`);
@@ -185,8 +256,12 @@ async function prompt(opts, available) {
     opts.skills.some((s) => fs.existsSync(path.join(opts.global ? os.homedir() : process.cwd(), TARGETS[a], s))),
   );
   if (exists) {
-    const [ow] = await select("이미 설치된 스킬이 있습니다", [{ label: "덮어쓰기" }, { label: "건너뛰기" }]);
-    opts.force = ow === 0;
+    const [ow] = await select("이미 설치된 스킬이 있습니다", [
+      { label: "바뀐 것만 업데이트", hint: "hash 비교, 로컬 수정은 보호" },
+      { label: "덮어쓰기" },
+      { label: "건너뛰기" },
+    ]);
+    opts.mode = ["update", "force", "skip"][ow];
   }
   console.log();
 }
@@ -203,7 +278,9 @@ async function main() {
     return;
   }
 
+  if (opts.command === "update") return update(opts, available);
   if (opts.interactive && !opts.yes) await prompt(opts, available);
+  const mode = opts.mode || (opts.force ? "force" : "update");
 
   const skills = opts.skills.length ? opts.skills : [...available.keys()];
   const missing = skills.filter((s) => !available.has(s));
@@ -214,21 +291,30 @@ async function main() {
     const dir = path.join(base, TARGETS[agent]);
     fs.mkdirSync(dir, { recursive: true });
     for (const skill of skills) {
-      const dest = path.join(dir, skill);
-      if (fs.existsSync(dest)) {
-        if (!opts.force) {
-          console.log(`- skip  ${dest} (이미 있음, --force로 덮어쓰기)`);
-          continue;
-        }
-        fs.rmSync(dest, { recursive: true, force: true });
-      }
-      fs.cpSync(available.get(skill).dir, dest, {
-        recursive: true,
-        filter: (src) => !/(__pycache__|\.pyc$|\.DS_Store$)/.test(src),
-      });
-      console.log(`✓ ${dest}${available.get(skill).private ? " 🔒" : ""}`);
+      installSkill(skill, available.get(skill), path.join(dir, skill), { mode });
     }
   }
+}
+
+// Find installed copies of known skills and refresh the ones whose hash differs from the source.
+function update(opts, available) {
+  const bases = opts.global ? [os.homedir()] : opts.explicitAgents ? [process.cwd()] : [...new Set([process.cwd(), os.homedir()])];
+  const agents = opts.explicitAgents ? opts.agents : Object.keys(TARGETS);
+  const missing = opts.skills.filter((s) => !available.has(s));
+  if (missing.length) throw new Error(`없는 스킬: ${missing.join(", ")}`);
+  let found = 0;
+  for (const base of bases) {
+    for (const agent of agents) {
+      const dir = path.join(base, TARGETS[agent]);
+      if (!fs.existsSync(dir)) continue;
+      for (const name of fs.readdirSync(dir).sort()) {
+        if (!available.has(name) || (opts.skills.length && !opts.skills.includes(name))) continue;
+        found++;
+        installSkill(name, available.get(name), path.join(dir, name), { mode: opts.force ? "force" : "update", check: opts.check });
+      }
+    }
+  }
+  if (!found) console.log("업데이트할 설치된 스킬이 없습니다.");
 }
 
 main().catch((e) => {

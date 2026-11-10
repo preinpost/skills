@@ -35,6 +35,19 @@ npx github:preinpost/skills -g --force
 
 [vercel-labs/skills](https://github.com/vercel-labs/skills) CLI로도 설치할 수 있다: `npx skills add preinpost/skills`
 
+### 업데이트
+
+설치할 때 스킬 디렉터리 내용의 sha256 hash를 `<스킬>/.skill-meta.json`에 기록해 둔다. `update`는 이 hash와 레포의 현재 hash를 비교해서 바뀐 스킬만 다시 설치한다.
+
+```bash
+npx github:preinpost/skills update            # ./ 와 ~ 의 claude/agents/pi 전부 확인 후 바뀐 것만 업데이트
+npx github:preinpost/skills update --check    # 확인만 (바꾸지 않음)
+npx github:preinpost/skills update orchestrator -g
+```
+
+- `=` 최신 · `↑` 업데이트됨 · `!` 설치본을 로컬에서 직접 고쳐서 건너뜀 (`--force`로 덮어쓰기)
+- 일반 설치도 기본 동작은 똑같다. 이미 있으면 바뀐 경우에만 덮어쓴다.
+
 ### 비공개 스킬
 
 비공개 레포 [`preinpost/skills-private`](https://github.com/preinpost/skills-private)에 접근 권한이 있으면(`gh auth login` 또는 SSH 키) 같은 명령으로 그 레포의 스킬도 `🔒`로 함께 표시·설치된다. 권한이 없으면 묻지 않고 건너뛴다. 다른 레포를 쓰려면 `SKILLS_PRIVATE_REPO=owner/repo`, 끄려면 `--no-private`.
