@@ -33,7 +33,7 @@ description: '오케스트레이터 모드. 메인 에이전트는 사용자 의
 - model: `deepseek/deepseek-flash` (DeepSeek V4.1 Flash)
 - thinking: `max`
 
-`delegate_task`의 `target`: `{"providerInstanceId": "pi", "model": "deepseek/deepseek-flash", "options": {"thinking": "max"}}`
+`delegate_task`의 `target`: `{"providerInstanceId": "pi", "model": "opencode-go/deepseek-v4.1-flash", "options": {"thinking": "max"}}`
 
 사용자가 이번 세션에서 다른 모델을 지정했을 때만 그 값을 쓴다. 이 provider·모델을 쓸 수 없으면(`orchestrator_capabilities`에서 비활성 등) 임의로 바꾸지 말고 사용자에게 묻는다.
 
