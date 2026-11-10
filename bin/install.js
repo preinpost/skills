@@ -55,7 +55,7 @@ function listSkills(roots) {
       }
     }
   }
-  return new Map([...skills].sort(([a], [b]) => a.localeCompare(b)));
+  return new Map([...skills].sort(([a, x], [b, y]) => x.private - y.private || a.localeCompare(b)));
 }
 
 function label(name, skill) {
