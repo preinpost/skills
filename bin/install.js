@@ -35,7 +35,8 @@ Options:
       --no-private     비공개 레포(${PRIVATE_REPO})를 받지 않음
   -h, --help           도움말
 
-전역 설치·업데이트(-g)는 ~/.agents/skills/.skills-source.json 에 설치 사본 요약을 기록한다.
+전역 설치·업데이트(-g)는 이 설치기가 관리하는 스킬(설치 사본에 .skill-meta.json 이 있는 것)만
+~/.agents/skills/.skills-source.json 에 요약한다. 다른 도구로 설치한 스킬은 여기에 나오지 않는다.
 
 Examples:
   npx github:preinpost/skills                     # TUI로 스킬·위치 선택
@@ -116,6 +117,7 @@ function tilde(p) {
 }
 
 // 전역 설치/업데이트 후 ~/.agents/skills/.skills-source.json 에 설치 사본의 출처를 모아 둔다.
+// 이 설치기가 관리하는 사본(.skill-meta.json 이 있는 것)만 담는다. 다른 도구로 설치한 스킬은 제외한다.
 function writeManifest(opts) {
   if (!opts.global || opts.check) return;
   const home = os.homedir();
@@ -127,12 +129,9 @@ function writeManifest(opts) {
       if (!d.isDirectory()) continue;
       const dest = path.join(dir, d.name);
       const meta = readMeta(dest);
-      skills.push({
-        name: d.name,
-        dir: tilde(dest),
-        source: meta?.source ?? null,
-        sourceUrl: meta?.sourceUrl ?? null,
-      });
+      // 구버전 meta는 sourceUrl이 없을 수 있다. 관리 대상 판별은 source로만 한다.
+      if (!meta?.source) continue;
+      skills.push({ name: d.name, dir: tilde(dest), source: meta.source, sourceUrl: meta.sourceUrl ?? null });
     }
   }
   skills.sort((a, b) => a.dir.localeCompare(b.dir));
