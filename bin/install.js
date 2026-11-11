@@ -8,6 +8,7 @@ const crypto = require("crypto");
 const { spawnSync } = require("child_process");
 
 const ROOT = path.resolve(__dirname, "..");
+const PUBLIC_REPO = "preinpost/skills";
 const PRIVATE_REPO = process.env.SKILLS_PRIVATE_REPO || "preinpost/skills-private";
 const META = ".skill-meta.json";
 const IGNORE = /(__pycache__|\.pyc$|\.DS_Store$)/;
@@ -33,6 +34,8 @@ Options:
   -y, --yes            TUI 없이 기본값으로 설치
       --no-private     비공개 레포(${PRIVATE_REPO})를 받지 않음
   -h, --help           도움말
+
+전역 설치·업데이트(-g)는 ~/.agents/skills/.skills-source.json 에 설치 사본 요약을 기록한다.
 
 Examples:
   npx github:preinpost/skills                     # TUI로 스킬·위치 선택
@@ -92,11 +95,54 @@ function readMeta(dest) {
   }
 }
 
+function gitUrl(repo) {
+  return `git@github.com:${repo}.git`;
+}
+
 function copySkill(skill, dest, hash) {
   fs.rmSync(dest, { recursive: true, force: true });
   fs.cpSync(skill.dir, dest, { recursive: true, filter: (src) => !IGNORE.test(src) });
-  const meta = { hash, source: skill.private ? PRIVATE_REPO : "preinpost/skills", installedAt: new Date().toISOString() };
+  const source = skill.private ? PRIVATE_REPO : PUBLIC_REPO;
+  const meta = { hash, source, sourceUrl: gitUrl(source), installedAt: new Date().toISOString() };
+  // npx 실행은 임시 클론이라 repoPath가 의미 없다. 실제 체크아웃일 때만 남긴다. hashDir()는 META를 무시한다.
+  if (fs.existsSync(path.join(ROOT, ".git"))) meta.repoPath = ROOT;
   fs.writeFileSync(path.join(dest, META), JSON.stringify(meta, null, 2) + "\n");
+}
+
+// 홈 아래 경로를 ~로 축약한다.
+function tilde(p) {
+  const home = os.homedir();
+  return p === home ? "~" : p.startsWith(home + path.sep) ? `~${p.slice(home.length)}` : p;
+}
+
+// 전역 설치/업데이트 후 ~/.agents/skills/.skills-source.json 에 설치 사본의 출처를 모아 둔다.
+function writeManifest(opts) {
+  if (!opts.global || opts.check) return;
+  const home = os.homedir();
+  const skills = [];
+  for (const agent of Object.keys(TARGETS)) {
+    const dir = path.join(home, TARGETS[agent]);
+    if (!fs.existsSync(dir)) continue;
+    for (const d of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (!d.isDirectory()) continue;
+      const dest = path.join(dir, d.name);
+      const meta = readMeta(dest);
+      skills.push({
+        name: d.name,
+        dir: tilde(dest),
+        source: meta?.source ?? null,
+        sourceUrl: meta?.sourceUrl ?? null,
+      });
+    }
+  }
+  skills.sort((a, b) => a.dir.localeCompare(b.dir));
+  const manifest = { updatedAt: new Date().toISOString() };
+  // copySkill()의 meta와 같은 조건: 실제 체크아웃에서 실행할 때만 repoPath를 남긴다.
+  if (fs.existsSync(path.join(ROOT, ".git"))) manifest.repoPath = ROOT;
+  manifest.skills = skills;
+  const out = path.join(home, TARGETS.agents, ".skills-source.json");
+  fs.mkdirSync(path.dirname(out), { recursive: true });
+  fs.writeFileSync(out, JSON.stringify(manifest, null, 2) + "\n");
 }
 
 // mode: "update" (바뀐 것만, 로컬 수정은 보호) | "force" | "skip". check=true면 상태만 보고.
@@ -294,6 +340,7 @@ async function main() {
       installSkill(skill, available.get(skill), path.join(dir, skill), { mode });
     }
   }
+  if (!opts.check) writeManifest(opts);
 }
 
 // Find installed copies of known skills and refresh the ones whose hash differs from the source.
@@ -315,6 +362,7 @@ function update(opts, available) {
     }
   }
   if (!found) console.log("업데이트할 설치된 스킬이 없습니다.");
+  if (!opts.check) writeManifest(opts);
 }
 
 main().catch((e) => {

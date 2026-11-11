@@ -48,6 +48,11 @@ npx github:preinpost/skills update orchestrator -g
 - `=` 최신 · `↑` 업데이트됨 · `!` 설치본을 로컬에서 직접 고쳐서 건너뜀 (`--force`로 덮어쓰기)
 - 일반 설치도 기본 동작은 똑같다. 이미 있으면 바뀐 경우에만 덮어쓴다.
 
+### 원본 저장소 안내
+
+설치 사본의 `.skill-meta.json`에 원본 저장소(`source`)와 클론 URL(`sourceUrl`)이 기록된다. 실제 체크아웃에서 실행하면 `repoPath`도 함께 남는다. 스킬을 고칠 때는 이 정보로 원본 저장소를 찾아 수정하고 커밋한 뒤 사본에 반영한다.
+전역 설치·업데이트(`-g`)를 실행하면 세 위치(`~/.claude/skills`, `~/.agents/skills`, `~/.pi/agent/skills`)의 사본을 모아 `~/.agents/skills/.skills-source.json` 한 파일에 요약한다.
+
 ### 비공개 스킬
 
 비공개 레포 [`preinpost/skills-private`](https://github.com/preinpost/skills-private)에 접근 권한이 있으면(`gh auth login` 또는 SSH 키) 같은 명령으로 그 레포의 스킬도 `🔒`로 함께 표시·설치된다. 권한이 없으면 묻지 않고 건너뛴다. 다른 레포를 쓰려면 `SKILLS_PRIVATE_REPO=owner/repo`, 끄려면 `--no-private`.
