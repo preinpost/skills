@@ -36,8 +36,9 @@ Options:
       --no-private     비공개 레포(${PRIVATE_REPO})를 받지 않음
   -h, --help           도움말
 
-설치·업데이트는 이 설치기가 관리하는 스킬의 hash·출처·설치 시각을
+설치·업데이트는 이 설치기가 관리하는 스킬의 hash·출처·설치·갱신 시각을
 <base>/.ms-skills-source.json 한 파일에 기록한다(base는 전역이면 ~, 아니면 현재 디렉터리).
+항목의 installedAt 은 최초 설치 시각, updatedAt 은 마지막으로 내용을 덮어쓴 시각이다.
 스킬 폴더에는 메타 파일을 만들지 않으며, 예전 .skill-meta.json 은 로컬 수정 판별용으로만 읽는다.
 다른 도구로 설치한 스킬은 이 파일에 나오지 않는다.
 
@@ -141,6 +142,7 @@ function loadRegistry(base) {
         source: entry.source,
         sourceUrl: entry.sourceUrl,
         installedAt: entry.installedAt,
+        updatedAt: entry.updatedAt ?? entry.installedAt,
       });
     }
   } catch {
@@ -149,17 +151,35 @@ function loadRegistry(base) {
   return { file, skills };
 }
 
-function putEntry(registry, name, dest, hash, skill, installedAt) {
+function putEntry(registry, name, dest, hash, skill, installedAt, updatedAt) {
   const dir = path.resolve(dest);
   const source = skill.private ? PRIVATE_REPO : PUBLIC_REPO;
-  registry.skills.set(dir, { name, dir, hash, source, sourceUrl: gitUrl(source), installedAt: installedAt || new Date().toISOString() });
+  const stamp = new Date().toISOString();
+  const first = installedAt || stamp;
+  registry.skills.set(dir, {
+    name,
+    dir,
+    hash,
+    source,
+    sourceUrl: gitUrl(source),
+    installedAt: first,
+    updatedAt: updatedAt || first,
+  });
 }
 
 // 실행 중 메모리에서 갱신한 레지스트리를 한 번만 쓴다. --check 호출부는 이 함수를 부르지 않는다.
 function saveRegistry(registry) {
   const skills = [...registry.skills.values()]
     .filter((s) => fs.existsSync(s.dir))
-    .map((s) => ({ name: s.name, dir: tilde(s.dir), hash: s.hash, source: s.source, sourceUrl: s.sourceUrl, installedAt: s.installedAt }))
+    .map((s) => ({
+      name: s.name,
+      dir: tilde(s.dir),
+      hash: s.hash,
+      source: s.source,
+      sourceUrl: s.sourceUrl,
+      installedAt: s.installedAt,
+      updatedAt: s.updatedAt || s.installedAt,
+    }))
     .sort((a, b) => a.dir.localeCompare(b.dir));
   // 기록할 것도 없고 기존 파일도 없으면 빈 디렉터리만 만들지 않는다.
   if (!skills.length && !fs.existsSync(registry.file)) return;
@@ -181,13 +201,17 @@ function installSkill(name, skill, dest, { mode, check = false, registry }) {
   const legacy = entry ? null : readLegacyMeta(dest);
   const savedHash = entry?.hash ?? legacy?.hash;
   const installedAt = entry?.installedAt ?? legacy?.installedAt;
-  const record = (hash) => {
-    if (!check) putEntry(registry, name, dest, hash, skill, installedAt);
+  const updatedAt = entry?.updatedAt ?? legacy?.updatedAt ?? legacy?.installedAt;
+  // copied=true는 내용을 실제로 복사한 경우다. 그때만 updatedAt을 now로 올린다.
+  const record = (hash, copied = false) => {
+    if (check) return;
+    const stamp = copied ? new Date().toISOString() : null;
+    putEntry(registry, name, dest, hash, skill, installedAt || stamp, stamp || updatedAt);
   };
   if (!fs.existsSync(dest)) {
     if (check) return console.log(`+ ${dest} (미설치)`);
     copySkill(skill, dest);
-    record(src);
+    record(src, true);
     return console.log(`✓ ${dest}${lock}`);
   }
   if (mode === "skip") return console.log(`- skip  ${dest} (이미 있음)`);
@@ -204,7 +228,7 @@ function installSkill(name, skill, dest, { mode, check = false, registry }) {
   const from = savedHash || cur;
   if (check) return console.log(`↑ ${dest} (${from} → ${src}, 업데이트 가능)`);
   copySkill(skill, dest);
-  record(src);
+  record(src, true);
   console.log(`↑ ${dest}${lock} (${from} → ${src})`);
 }
 
