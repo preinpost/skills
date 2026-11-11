@@ -10,7 +10,8 @@ const { spawnSync } = require("child_process");
 const ROOT = path.resolve(__dirname, "..");
 const PUBLIC_REPO = "preinpost/skills";
 const PRIVATE_REPO = process.env.SKILLS_PRIVATE_REPO || "preinpost/skills-private";
-const META = ".skill-meta.json";
+const LEGACY_META = ".skill-meta.json";
+const SOURCE_FILE = ".ms-skills-source.json";
 const IGNORE = /(__pycache__|\.pyc$|\.DS_Store$)/;
 const TARGETS = {
   claude: ".claude/skills",
@@ -35,8 +36,10 @@ Options:
       --no-private     비공개 레포(${PRIVATE_REPO})를 받지 않음
   -h, --help           도움말
 
-전역 설치·업데이트(-g)는 이 설치기가 관리하는 스킬(설치 사본에 .skill-meta.json 이 있는 것)만
-~/.agents/skills/.ms-skills-source.json 에 요약한다. 다른 도구로 설치한 스킬은 여기에 나오지 않는다.
+설치·업데이트는 이 설치기가 관리하는 스킬의 hash·출처·설치 시각을
+<base>/.ms-skills-source.json 한 파일에 기록한다(base는 전역이면 ~, 아니면 현재 디렉터리).
+스킬 폴더에는 메타 파일을 만들지 않으며, 예전 .skill-meta.json 은 로컬 수정 판별용으로만 읽는다.
+다른 도구로 설치한 스킬은 이 파일에 나오지 않는다.
 
 Examples:
   npx github:preinpost/skills                     # TUI로 스킬·위치 선택
@@ -79,7 +82,7 @@ function hashDir(dir) {
   const walk = (d) => {
     for (const e of fs.readdirSync(d, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1))) {
       const p = path.join(d, e.name);
-      if (IGNORE.test(p) || (d === dir && e.name === META)) continue;
+      if (IGNORE.test(p) || (d === dir && e.name === LEGACY_META)) continue;
       if (e.isDirectory()) walk(p);
       else if (e.isFile()) h.update(`${path.relative(dir, p).split(path.sep).join("/")}\0`).update(fs.readFileSync(p)).update("\0");
     }
@@ -88,9 +91,10 @@ function hashDir(dir) {
   return h.digest("hex").slice(0, 12);
 }
 
-function readMeta(dest) {
+// 구버전 설치기가 스킬 폴더에 남긴 메타. 새 버전은 읽기만 하고 다시 쓰지 않는다.
+function readLegacyMeta(dest) {
   try {
-    return JSON.parse(fs.readFileSync(path.join(dest, META), "utf8"));
+    return JSON.parse(fs.readFileSync(path.join(dest, LEGACY_META), "utf8"));
   } catch {
     return null;
   }
@@ -100,75 +104,107 @@ function gitUrl(repo) {
   return `git@github.com:${repo}.git`;
 }
 
-function copySkill(skill, dest, hash) {
+// 스킬 폴더에는 메타 파일을 쓰지 않는다. 레지스트리 갱신은 호출 측(installSkill)이 맡는다.
+function copySkill(skill, dest) {
   fs.rmSync(dest, { recursive: true, force: true });
   fs.cpSync(skill.dir, dest, { recursive: true, filter: (src) => !IGNORE.test(src) });
-  const source = skill.private ? PRIVATE_REPO : PUBLIC_REPO;
-  const meta = { hash, source, sourceUrl: gitUrl(source), installedAt: new Date().toISOString() };
-  // npx 실행은 임시 클론이라 repoPath가 의미 없다. 실제 체크아웃일 때만 남긴다. hashDir()는 META를 무시한다.
-  if (fs.existsSync(path.join(ROOT, ".git"))) meta.repoPath = ROOT;
-  fs.writeFileSync(path.join(dest, META), JSON.stringify(meta, null, 2) + "\n");
 }
 
-// 홈 아래 경로를 ~로 축약한다.
+// 홈 아래 경로를 ~로 축약한다. 레지스트리의 dir 표기에 쓴다.
 function tilde(p) {
   const home = os.homedir();
   return p === home ? "~" : p.startsWith(home + path.sep) ? `~${p.slice(home.length)}` : p;
 }
 
-// 전역 설치/업데이트 후 ~/.agents/skills/.ms-skills-source.json 에 설치 사본의 출처를 모아 둔다.
-// `ms-` 접두사는 사용자 본인이 관리하는 파일임을 표시한다.
-// 이 설치기가 관리하는 사본(.skill-meta.json 이 있는 것)만 담는다. 다른 도구로 설치한 스킬은 제외한다.
-function writeManifest(opts) {
-  if (!opts.global || opts.check) return;
+// 레지스트리에 적힌 ~ 경로를 현재 홈 기준 절대 경로로 되돌린다.
+function expandTilde(p) {
   const home = os.homedir();
-  const skills = [];
-  for (const agent of Object.keys(TARGETS)) {
-    const dir = path.join(home, TARGETS[agent]);
-    if (!fs.existsSync(dir)) continue;
-    for (const d of fs.readdirSync(dir, { withFileTypes: true })) {
-      if (!d.isDirectory()) continue;
-      const dest = path.join(dir, d.name);
-      const meta = readMeta(dest);
-      // 구버전 meta는 sourceUrl이 없을 수 있다. 관리 대상 판별은 source로만 한다.
-      if (!meta?.source) continue;
-      skills.push({ name: d.name, dir: tilde(dest), source: meta.source, sourceUrl: meta.sourceUrl ?? null });
+  if (p === "~") return home;
+  if (p.startsWith("~/") || p.startsWith(`~${path.sep}`)) return path.join(home, p.slice(2));
+  return p;
+}
+
+// <base>/.ms-skills-source.json 한 파일이 그 base 아래 세 위치의 스킬을 모두 담는다.
+// base는 전역이면 홈, 프로젝트 설치면 현재 디렉터리다. `ms-` 접두사는 사용자 본인이 관리하는 파일임을 표시한다.
+function loadRegistry(base) {
+  const file = path.join(base, SOURCE_FILE);
+  const skills = new Map();
+  try {
+    const data = JSON.parse(fs.readFileSync(file, "utf8"));
+    for (const entry of Array.isArray(data.skills) ? data.skills : []) {
+      if (typeof entry?.dir !== "string" || typeof entry.hash !== "string") continue;
+      const dir = path.resolve(expandTilde(entry.dir));
+      skills.set(dir, {
+        name: entry.name,
+        dir,
+        hash: entry.hash,
+        source: entry.source,
+        sourceUrl: entry.sourceUrl,
+        installedAt: entry.installedAt,
+      });
     }
+  } catch {
+    // 파일이 없거나 깨졌으면 빈 레지스트리로 시작한다.
   }
-  skills.sort((a, b) => a.dir.localeCompare(b.dir));
-  const manifest = { updatedAt: new Date().toISOString() };
-  // copySkill()의 meta와 같은 조건: 실제 체크아웃에서 실행할 때만 repoPath를 남긴다.
-  if (fs.existsSync(path.join(ROOT, ".git"))) manifest.repoPath = ROOT;
-  manifest.skills = skills;
-  const out = path.join(home, TARGETS.agents, ".ms-skills-source.json");
-  fs.mkdirSync(path.dirname(out), { recursive: true });
-  fs.writeFileSync(out, JSON.stringify(manifest, null, 2) + "\n");
+  return { file, skills };
+}
+
+function putEntry(registry, name, dest, hash, skill, installedAt) {
+  const dir = path.resolve(dest);
+  const source = skill.private ? PRIVATE_REPO : PUBLIC_REPO;
+  registry.skills.set(dir, { name, dir, hash, source, sourceUrl: gitUrl(source), installedAt: installedAt || new Date().toISOString() });
+}
+
+// 실행 중 메모리에서 갱신한 레지스트리를 한 번만 쓴다. --check 호출부는 이 함수를 부르지 않는다.
+function saveRegistry(registry) {
+  const skills = [...registry.skills.values()]
+    .filter((s) => fs.existsSync(s.dir))
+    .map((s) => ({ name: s.name, dir: tilde(s.dir), hash: s.hash, source: s.source, sourceUrl: s.sourceUrl, installedAt: s.installedAt }))
+    .sort((a, b) => a.dir.localeCompare(b.dir));
+  // 기록할 것도 없고 기존 파일도 없으면 빈 디렉터리만 만들지 않는다.
+  if (!skills.length && !fs.existsSync(registry.file)) return;
+  const data = { updatedAt: new Date().toISOString() };
+  // 실제 체크아웃에서 실행할 때만 repoPath를 남긴다. npx는 임시 클론이라 의미가 없다.
+  if (fs.existsSync(path.join(ROOT, ".git"))) data.repoPath = ROOT;
+  data.skills = skills;
+  fs.mkdirSync(path.dirname(registry.file), { recursive: true });
+  fs.writeFileSync(registry.file, JSON.stringify(data, null, 2) + "\n");
 }
 
 // mode: "update" (바뀐 것만, 로컬 수정은 보호) | "force" | "skip". check=true면 상태만 보고.
-function installSkill(name, skill, dest, { mode, check = false }) {
+// 기존 hash는 레지스트리에서 읽고, 항목이 없으면 구버전 .skill-meta.json을 fallback으로 쓴다.
+// 원본과 같으면 최신, 저장된 hash와 현재 hash가 다르면 로컬 수정으로 보고 건너뛴다. 그 외에는 덮어쓴다.
+function installSkill(name, skill, dest, { mode, check = false, registry }) {
   const lock = skill.private ? " 🔒" : "";
   const src = hashDir(skill.dir);
+  const entry = registry.skills.get(path.resolve(dest));
+  const legacy = entry ? null : readLegacyMeta(dest);
+  const savedHash = entry?.hash ?? legacy?.hash;
+  const installedAt = entry?.installedAt ?? legacy?.installedAt;
+  const record = (hash) => {
+    if (!check) putEntry(registry, name, dest, hash, skill, installedAt);
+  };
   if (!fs.existsSync(dest)) {
     if (check) return console.log(`+ ${dest} (미설치)`);
-    copySkill(skill, dest, src);
+    copySkill(skill, dest);
+    record(src);
     return console.log(`✓ ${dest}${lock}`);
   }
   if (mode === "skip") return console.log(`- skip  ${dest} (이미 있음)`);
   const cur = hashDir(dest);
-  const meta = readMeta(dest);
   if (mode !== "force") {
     if (cur === src) {
-      if (!check && meta?.hash !== src) copySkill(skill, dest, src); // 메타만 갱신
+      if (entry || legacy) record(src); // hash만 갱신하거나 구버전 meta를 레지스트리로 옮긴다
       return console.log(`= ${dest} (최신 ${src})`);
     }
-    if (meta && meta.hash !== cur) {
+    if (savedHash && savedHash !== cur) {
       return console.log(`! ${dest} (로컬에서 수정됨, --force로 덮어쓰기)`);
     }
   }
-  const from = meta?.hash || cur;
+  const from = savedHash || cur;
   if (check) return console.log(`↑ ${dest} (${from} → ${src}, 업데이트 가능)`);
-  copySkill(skill, dest, src);
+  copySkill(skill, dest);
+  record(src);
   console.log(`↑ ${dest}${lock} (${from} → ${src})`);
 }
 
@@ -333,14 +369,15 @@ async function main() {
   if (missing.length) throw new Error(`없는 스킬: ${missing.join(", ")} (목록: ${[...available.keys()].join(", ")})`);
 
   const base = opts.global ? os.homedir() : process.cwd();
+  const registry = loadRegistry(base);
   for (const agent of opts.agents) {
     const dir = path.join(base, TARGETS[agent]);
     fs.mkdirSync(dir, { recursive: true });
     for (const skill of skills) {
-      installSkill(skill, available.get(skill), path.join(dir, skill), { mode });
+      installSkill(skill, available.get(skill), path.join(dir, skill), { mode, registry });
     }
   }
-  if (!opts.check) writeManifest(opts);
+  if (!opts.check) saveRegistry(registry);
 }
 
 // Find installed copies of known skills and refresh the ones whose hash differs from the source.
@@ -351,18 +388,23 @@ function update(opts, available) {
   if (missing.length) throw new Error(`없는 스킬: ${missing.join(", ")}`);
   let found = 0;
   for (const base of bases) {
+    const registry = loadRegistry(base);
     for (const agent of agents) {
       const dir = path.join(base, TARGETS[agent]);
       if (!fs.existsSync(dir)) continue;
       for (const name of fs.readdirSync(dir).sort()) {
         if (!available.has(name) || (opts.skills.length && !opts.skills.includes(name))) continue;
         found++;
-        installSkill(name, available.get(name), path.join(dir, name), { mode: opts.force ? "force" : "update", check: opts.check });
+        installSkill(name, available.get(name), path.join(dir, name), {
+          mode: opts.force ? "force" : "update",
+          check: opts.check,
+          registry,
+        });
       }
     }
+    if (!opts.check) saveRegistry(registry);
   }
   if (!found) console.log("업데이트할 설치된 스킬이 없습니다.");
-  if (!opts.check) writeManifest(opts);
 }
 
 main().catch((e) => {

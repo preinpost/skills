@@ -37,7 +37,7 @@ npx github:preinpost/skills -g --force
 
 ### 업데이트
 
-설치할 때 스킬 디렉터리 내용의 sha256 hash를 `<스킬>/.skill-meta.json`에 기록해 둔다. `update`는 이 hash와 레포의 현재 hash를 비교해서 바뀐 스킬만 다시 설치한다.
+설치·업데이트할 때 스킬 디렉터리 내용의 sha256 hash를 `<base>/.ms-skills-source.json`에 기록해 둔다. `base`는 전역 설치면 홈(`~`), 프로젝트 설치는 현재 디렉터리다. `update`는 이 hash와 레포의 현재 hash를 비교해서 바뀐 스킬만 다시 설치한다.
 
 ```bash
 npx github:preinpost/skills update            # ./ 와 ~ 의 claude/agents/pi 전부 확인 후 바뀐 것만 업데이트
@@ -50,8 +50,8 @@ npx github:preinpost/skills update orchestrator -g
 
 ### 원본 저장소 안내
 
-설치 사본의 `.skill-meta.json`에 원본 저장소(`source`)와 클론 URL(`sourceUrl`)이 기록된다. 실제 체크아웃에서 실행하면 `repoPath`도 함께 남는다. 스킬을 고칠 때는 이 정보로 원본 저장소를 찾아 수정하고 커밋한 뒤 사본에 반영한다.
-전역 설치·업데이트(`-g`)를 실행하면 세 위치(`~/.claude/skills`, `~/.agents/skills`, `~/.pi/agent/skills`)의 사본 중 이 설치기가 관리하는 것(`.skill-meta.json`이 있는 사본)만 골라 `~/.agents/skills/.ms-skills-source.json` 한 파일에 요약한다. 다른 도구(예: `npx skills`)로 설치해 `.skill-meta.json`이 없는 스킬은 이 파일에 나오지 않는다.
+설치한 스킬의 hash·출처(`source`)·클론 URL(`sourceUrl`)·설치 시각(`installedAt`)은 `<base>/.ms-skills-source.json` 한 파일에 모아 기록한다. 이 파일 하나가 그 base 아래 세 위치(`.claude/skills`, `.agents/skills`, `.pi/agent/skills`)의 스킬을 모두 담는다. 실제 체크아웃에서 실행하면 `repoPath`도 함께 남는다. 스킬 폴더 안에는 메타 파일을 만들지 않으므로 원본 파일만 남는다.
+예전 버전이 스킬 폴더에 남긴 `<스킬>/.skill-meta.json`은 따로 지우지 않고, 레지스트리에 항목이 없을 때 로컬 수정 판별용 fallback으로만 읽는다. 이 설치기가 설치·갱신한 스킬만 기록하며, 다른 도구(예: `npx skills`)로 설치한 스킬은 이 파일에 나오지 않는다. 이 설치기는 `AGENTS.md`, `CLAUDE.md` 같은 사용자 소유 지침 파일은 쓰지 않는다. 스킬을 고칠 때는 레지스트리의 정보로 원본 저장소를 찾아 수정하고 커밋한 뒤 사본에 반영한다.
 
 ### 비공개 스킬
 
