@@ -51,7 +51,7 @@ npx github:preinpost/skills update orchestrator -g
 ### 원본 저장소 안내
 
 설치 사본의 `.skill-meta.json`에 원본 저장소(`source`)와 클론 URL(`sourceUrl`)이 기록된다. 실제 체크아웃에서 실행하면 `repoPath`도 함께 남는다. 스킬을 고칠 때는 이 정보로 원본 저장소를 찾아 수정하고 커밋한 뒤 사본에 반영한다.
-전역 설치·업데이트(`-g`)를 실행하면 세 위치(`~/.claude/skills`, `~/.agents/skills`, `~/.pi/agent/skills`)의 사본 중 이 설치기가 관리하는 것(`.skill-meta.json`이 있는 사본)만 골라 `~/.agents/skills/.skills-source.json` 한 파일에 요약한다. 다른 도구(예: `npx skills`)로 설치해 `.skill-meta.json`이 없는 스킬은 이 파일에 나오지 않는다.
+전역 설치·업데이트(`-g`)를 실행하면 세 위치(`~/.claude/skills`, `~/.agents/skills`, `~/.pi/agent/skills`)의 사본 중 이 설치기가 관리하는 것(`.skill-meta.json`이 있는 사본)만 골라 `~/.agents/skills/.ms-skills-source.json` 한 파일에 요약한다. 다른 도구(예: `npx skills`)로 설치해 `.skill-meta.json`이 없는 스킬은 이 파일에 나오지 않는다.
 
 ### 비공개 스킬
 

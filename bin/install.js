@@ -36,7 +36,7 @@ Options:
   -h, --help           도움말
 
 전역 설치·업데이트(-g)는 이 설치기가 관리하는 스킬(설치 사본에 .skill-meta.json 이 있는 것)만
-~/.agents/skills/.skills-source.json 에 요약한다. 다른 도구로 설치한 스킬은 여기에 나오지 않는다.
+~/.agents/skills/.ms-skills-source.json 에 요약한다. 다른 도구로 설치한 스킬은 여기에 나오지 않는다.
 
 Examples:
   npx github:preinpost/skills                     # TUI로 스킬·위치 선택
@@ -116,7 +116,8 @@ function tilde(p) {
   return p === home ? "~" : p.startsWith(home + path.sep) ? `~${p.slice(home.length)}` : p;
 }
 
-// 전역 설치/업데이트 후 ~/.agents/skills/.skills-source.json 에 설치 사본의 출처를 모아 둔다.
+// 전역 설치/업데이트 후 ~/.agents/skills/.ms-skills-source.json 에 설치 사본의 출처를 모아 둔다.
+// `ms-` 접두사는 사용자 본인이 관리하는 파일임을 표시한다.
 // 이 설치기가 관리하는 사본(.skill-meta.json 이 있는 것)만 담는다. 다른 도구로 설치한 스킬은 제외한다.
 function writeManifest(opts) {
   if (!opts.global || opts.check) return;
@@ -139,7 +140,7 @@ function writeManifest(opts) {
   // copySkill()의 meta와 같은 조건: 실제 체크아웃에서 실행할 때만 repoPath를 남긴다.
   if (fs.existsSync(path.join(ROOT, ".git"))) manifest.repoPath = ROOT;
   manifest.skills = skills;
-  const out = path.join(home, TARGETS.agents, ".skills-source.json");
+  const out = path.join(home, TARGETS.agents, ".ms-skills-source.json");
   fs.mkdirSync(path.dirname(out), { recursive: true });
   fs.writeFileSync(out, JSON.stringify(manifest, null, 2) + "\n");
 }
