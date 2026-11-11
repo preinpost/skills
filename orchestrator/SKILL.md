@@ -1,6 +1,6 @@
 ---
 name: orchestrator
-description: '오케스트레이터 모드. 메인 에이전트는 사용자 의도 파악과 계획을 전담하고, 실제 작업(코드 읽기·수정, 조사, 테스트, 리뷰)은 반드시 하위 에이전트를 스폰해서 맡긴다. 스폰 전에 사용할 모델과 thinking effort를 사용자에게 묻는다. 트리거: "오케스트레이터로", "오케스트레이터 모드", "하위 에이전트로 돌려", "서브에이전트 써서", "직접 하지 말고 위임해", "orchestrate".'
+description: '오케스트레이터 모드. 메인 에이전트는 사용자 의도 파악과 계획을 전담하고, 실제 작업(코드 읽기·수정, 조사, 테스트, 리뷰)은 반드시 하위 에이전트를 스폰해서 맡긴다. 서브에이전트는 고정 설정(provider `pi`, model `opencode-go/deepseek-v4.1-flash`, thinking `max`)으로 스폰한다. 트리거: "오케스트레이터로", "오케스트레이터 모드", "하위 에이전트로 돌려", "서브에이전트 써서", "직접 하지 말고 위임해", "orchestrate".'
 ---
 
 # 오케스트레이터 모드
@@ -30,10 +30,10 @@ description: '오케스트레이터 모드. 메인 에이전트는 사용자 의
 묻지 않는다. 모든 서브에이전트는 아래 설정으로 스폰한다:
 
 - provider: `pi`
-- model: `mistral/deepseek-v4-1-flash-1017` (DeepSeek V4.1 Flash, Mistral 경유)
+- model: `opencode-go/deepseek-v4.1-flash` (DeepSeek V4.1 Flash, opencode-go 경유)
 - thinking: `max`
 
-`delegate_task`의 `target`: `{"providerInstanceId": "pi", "model": "mistral/deepseek-v4-1-flash-1017", "options": {"thinking": "max"}}`
+`delegate_task`의 `target`: `{"providerInstanceId": "pi", "model": "opencode-go/deepseek-v4.1-flash", "options": {"thinking": "max"}}`
 
 사용자가 이번 세션에서 다른 모델을 지정했을 때만 그 값을 쓴다. 이 provider·모델을 쓸 수 없으면(`orchestrator_capabilities`에서 비활성 등) 임의로 바꾸지 말고 사용자에게 묻는다.
 
