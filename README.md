@@ -48,6 +48,21 @@ npx github:preinpost/skills update orchestrator -g
 - `=` 최신 · `↑` 업데이트됨 · `!` 설치본을 로컬에서 직접 고쳐서 건너뜀 (`--force`로 덮어쓰기)
 - 일반 설치도 기본 동작은 똑같다. 이미 있으면 바뀐 경우에만 덮어쓴다.
 
+### 설치본에서 고친 스킬을 git에 반영 (sync)
+
+설치된 스킬(`~/.claude/skills/...` 등)을 직접 고친 뒤 원본 레포에 바로 커밋·푸시한다. 다른 PC에서는 `update`로 받으면 된다.
+
+```bash
+npx github:preinpost/skills sync --check      # 푸시할 것만 확인
+npx github:preinpost/skills sync              # 커밋·푸시 (🔒 스킬은 비공개 레포로)
+npx github:preinpost/skills sync orchestrator -m "orchestrator: 규칙 추가"
+```
+
+- 레지스트리 hash와 현재 내용이 다른 스킬만 올린다. 푸시 후 같은 스킬의 다른 사본(claude/agents/pi)도 맞추고 hash를 갱신한다.
+- 원본도 설치 이후 바뀌었으면(양쪽 수정) 건너뛴다. 먼저 `update`로 받거나 `--force`로 로컬 내용을 올린다.
+- 같은 스킬의 사본들이 서로 다르게 수정됐으면 건너뛴다.
+- 푸시 권한은 SSH 키 또는 `gh auth login`을 쓴다.
+
 ### 원본 저장소 안내
 
 설치한 스킬의 hash·출처(`source`)·클론 URL(`sourceUrl`)·설치 시각(`installedAt`, `updatedAt`)은 `<base>/.ms-skills-source.json` 한 파일에 모아 기록한다. 이 파일 하나가 그 base 아래 세 위치(`.claude/skills`, `.agents/skills`, `.pi/agent/skills`)의 스킬을 모두 담는다. 실제 체크아웃에서 실행하면 `repoPath`도 함께 남는다. 스킬 폴더 안에는 메타 파일을 만들지 않으므로 원본 파일만 남는다.

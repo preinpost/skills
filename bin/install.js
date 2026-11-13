@@ -21,17 +21,21 @@ const TARGETS = {
 
 const HELP = `Usage: npx github:preinpost/skills [skill...] [options]
        npx github:preinpost/skills update [skill...] [options]
+       npx github:preinpost/skills sync [skill...] [options]
 
 Commands:
   update               설치된 스킬 중 내용(hash)이 바뀐 것만 업데이트
                        (-g/-a를 안 주면 현재 디렉터리와 ~ 의 claude/agents/pi 를 모두 찾음)
+  sync                 설치본을 직접 고친 스킬을 원본 레포에 커밋·푸시하고
+                       같은 스킬의 다른 설치 사본에도 반영 (찾는 범위는 update와 같음)
 
 Options:
   -g, --global         홈 디렉터리(~)에 설치 (기본: 현재 디렉터리)
   -a, --agent <name>   설치 대상: ${Object.keys(TARGETS).join(", ")}, all (반복 가능, 기본: claude,agents)
   -l, --list           설치 가능한 스킬 목록
   -f, --force          이미 있는 스킬 무조건 덮어쓰기 (로컬 수정 포함)
-  -c, --check          update에서 바꾸지 않고 상태만 표시
+  -c, --check          update/sync에서 바꾸지 않고 상태만 표시
+  -m, --message <msg>  sync 커밋 메시지 (기본: "sync: <스킬들> (<호스트명>)")
   -y, --yes            TUI 없이 기본값으로 설치
       --no-private     비공개 레포(${PRIVATE_REPO})를 받지 않음
   -h, --help           도움말
@@ -48,7 +52,9 @@ Examples:
   npx github:preinpost/skills orchestrator -g     # ~/.claude/skills, ~/.agents/skills 에
   npx github:preinpost/skills -a pi -g            # ~/.pi/agent/skills 에
   npx github:preinpost/skills update              # 바뀐 스킬만 업데이트
-  npx github:preinpost/skills update --check      # 업데이트할 것만 확인`;
+  npx github:preinpost/skills update --check      # 업데이트할 것만 확인
+  npx github:preinpost/skills sync                # 로컬에서 고친 스킬을 git에 커밋·푸시
+  npx github:preinpost/skills sync --check        # 푸시할 것만 확인`;
 
 // Shallow-clone the private repo into a temp dir. Returns null without prompting if there is no access.
 function fetchPrivate() {
@@ -244,7 +250,7 @@ function describe(skill) {
 
 function parseArgs(argv) {
   const opts = { skills: [], agents: [], global: false, force: false, list: false, help: false, yes: false, private: true, check: false };
-  if (argv[0] === "update") opts.command = argv.shift();
+  if (argv[0] === "update" || argv[0] === "sync") opts.command = argv.shift();
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "-g" || a === "--global") opts.global = true;
@@ -254,6 +260,7 @@ function parseArgs(argv) {
     else if (a === "-y" || a === "--yes") opts.yes = true;
     else if (a === "-h" || a === "--help") opts.help = true;
     else if (a === "--no-private") opts.private = false;
+    else if (a === "-m" || a === "--message") opts.message = argv[++i];
     else if (a === "-a" || a === "--agent") opts.agents.push(...String(argv[++i] || "").split(","));
     else if (a.startsWith("-")) throw new Error(`알 수 없는 옵션: ${a}`);
     else opts.skills.push(a);
@@ -385,6 +392,7 @@ async function main() {
   }
 
   if (opts.command === "update") return update(opts, available);
+  if (opts.command === "sync") return sync(opts, available);
   if (opts.interactive && !opts.yes) await prompt(opts, available);
   const mode = opts.mode || (opts.force ? "force" : "update");
 
@@ -429,6 +437,113 @@ function update(opts, available) {
     if (!opts.check) saveRegistry(registry);
   }
   if (!found) console.log("업데이트할 설치된 스킬이 없습니다.");
+}
+
+function git(cwd, args, opts = {}) {
+  const r = spawnSync("git", args, { cwd, encoding: "utf8", ...opts });
+  if (r.status !== 0) throw new Error(`git ${args.join(" ")} 실패\n${(r.stderr || r.stdout || "").trim()}`);
+  return (r.stdout || "").trim();
+}
+
+// 푸시할 수 있게 원본 레포를 임시 디렉터리에 클론한다. SSH를 먼저, 안 되면 HTTPS(gh 자격 증명)를 쓴다.
+function cloneForPush(repo) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "skills-sync-"));
+  process.on("exit", () => fs.rmSync(dir, { recursive: true, force: true }));
+  const env = { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_SSH_COMMAND: "ssh -o BatchMode=yes" };
+  for (const url of [gitUrl(repo), `https://github.com/${repo}.git`]) {
+    const r = spawnSync("git", ["clone", "-q", "--depth", "1", url, dir], { env, stdio: "ignore", timeout: 60000 });
+    if (r.status === 0) return dir;
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.mkdirSync(dir);
+  }
+  throw new Error(`${repo} 를 클론할 수 없습니다 (SSH 키 또는 gh auth login 확인)`);
+}
+
+// 설치본 중 레지스트리 hash와 현재 내용이 다른(=로컬에서 고친) 스킬을 원본 레포에 커밋·푸시한다.
+// 원본도 설치 이후 바뀌었으면 양쪽 수정이므로 --force 없이는 건너뛴다.
+// 푸시 후에는 같은 스킬의 다른 설치 사본도 새 내용으로 맞추고 레지스트리 hash를 갱신한다.
+function sync(opts, available) {
+  const real = (p) => fs.realpathSync(p);
+  const bases = opts.global ? [os.homedir()] : opts.explicitAgents ? [process.cwd()] : [...new Set([real(process.cwd()), real(os.homedir())])];
+  const agents = opts.explicitAgents ? opts.agents : Object.keys(TARGETS);
+  const missing = opts.skills.filter((s) => !available.has(s));
+  if (missing.length) throw new Error(`없는 스킬: ${missing.join(", ")}`);
+
+  // name -> [{ dest, registry, saved, cur }]
+  const copies = new Map();
+  const registries = [];
+  for (const base of bases) {
+    const registry = loadRegistry(base);
+    registries.push(registry);
+    for (const agent of agents) {
+      const dir = path.join(base, TARGETS[agent]);
+      if (!fs.existsSync(dir)) continue;
+      for (const name of fs.readdirSync(dir).sort()) {
+        if (!available.has(name) || (opts.skills.length && !opts.skills.includes(name))) continue;
+        const dest = path.join(dir, name);
+        const entry = registry.skills.get(path.resolve(dest));
+        const saved = entry?.hash ?? readLegacyMeta(dest)?.hash;
+        if (!copies.has(name)) copies.set(name, []);
+        copies.get(name).push({ dest, registry, entry, saved, cur: hashDir(dest) });
+      }
+    }
+  }
+
+  // 레포별로 반영할 스킬을 모은다: repo -> [{ name, skill, from, list }]
+  const plans = new Map();
+  for (const [name, list] of copies) {
+    const skill = available.get(name);
+    const src = hashDir(skill.dir);
+    const edited = list.filter((c) => c.saved && c.cur !== c.saved && c.cur !== src);
+    if (!edited.length) continue;
+    const variants = new Set(edited.map((c) => c.cur));
+    if (variants.size > 1) {
+      console.log(`! ${name}: 사본들이 서로 다르게 수정됨, 건너뜀`);
+      for (const c of edited) console.log(`    ${c.dest} (${c.cur})`);
+      continue;
+    }
+    const from = edited[0];
+    if (from.saved !== src && !opts.force) {
+      console.log(`! ${name}: 원본도 설치 이후 바뀜 (${from.saved} → ${src}), --force로 로컬 내용으로 덮어쓰기`);
+      continue;
+    }
+    const repo = skill.private ? PRIVATE_REPO : PUBLIC_REPO;
+    console.log(`↑ ${name}${skill.private ? " 🔒" : ""}: ${from.dest} (${src} → ${from.cur})`);
+    if (!plans.has(repo)) plans.set(repo, []);
+    plans.get(repo).push({ name, skill, from, list });
+  }
+  if (!plans.size) return console.log("커밋할 로컬 수정이 없습니다.");
+  if (opts.check) return;
+
+  for (const [repo, items] of plans) {
+    const dir = cloneForPush(repo);
+    for (const { name, from } of items) copySkill({ dir: from.dest }, path.join(dir, name));
+    git(dir, ["add", "-A", ...items.map((i) => i.name)]);
+    if (!git(dir, ["status", "--porcelain"])) {
+      console.log(`= ${repo}: 원격과 같아 커밋할 것이 없음`);
+    } else {
+      const msg = opts.message || `sync: ${items.map((i) => i.name).join(", ")} (${os.hostname()})`;
+      git(dir, ["commit", "-q", "-m", msg]);
+      git(dir, ["push", "-q", "origin", "HEAD"], { stdio: ["ignore", "pipe", "pipe"] });
+      console.log(`✓ ${repo}: ${git(dir, ["log", "-1", "--format=%h %s"])}`);
+    }
+    // 푸시한 내용을 기준으로 다른 사본을 맞추고 hash를 기록한다.
+    for (const { name, list } of items) {
+      const pushed = { dir: path.join(dir, name), private: available.get(name).private };
+      const hash = hashDir(pushed.dir);
+      for (const c of list) {
+        let copied = false;
+        if (c.cur !== hash) {
+          copySkill(pushed, c.dest);
+          copied = true;
+          console.log(`  → ${c.dest}`);
+        }
+        const stamp = new Date().toISOString();
+        putEntry(c.registry, name, c.dest, hash, pushed, c.entry?.installedAt || stamp, copied ? stamp : c.entry?.updatedAt);
+      }
+    }
+  }
+  for (const registry of registries) saveRegistry(registry);
 }
 
 main().catch((e) => {
