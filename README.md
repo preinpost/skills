@@ -64,6 +64,20 @@ npx github:preinpost/skills sync orchestrator -m "orchestrator: 규칙 추가"
 - 같은 스킬의 사본들이 서로 다르게 수정됐으면 건너뛴다.
 - 푸시 권한은 SSH 키 또는 `gh auth login`을 쓴다.
 
+### 삭제 (remove)
+
+로컬 스킬 디렉터리를 지우고 `.ms-skills-source.json`의 항목도 뺀다. 원본 레포는 건드리지 않는다.
+
+```bash
+npx github:preinpost/skills remove ko-article-html                       # 사본이 하나면 바로, 여럿이면 TUI로 골라서 삭제
+npx github:preinpost/skills remove ~/.pi/agent/skills/ko-article-html   # 경로로 그 사본만 삭제
+npx github:preinpost/skills remove ko-article-html --check               # 지울 대상만 확인
+```
+
+- 이름으로 주면 `update`와 같은 범위(./ 와 ~ 의 claude/agents/pi)에서 찾는다. 사본이 여럿인데 터미널이 아니면 멈추며, 모두 지우려면 `-y`를 붙인다.
+- 이 설치기로 설치한 기록이 없는 폴더는 건드리지 않는다.
+- 로컬에서 고친 사본은 건너뛴다. 먼저 `sync`하거나 `--force`로 지운다.
+
 ### 원본 저장소 안내
 
 설치한 스킬의 hash·출처(`source`)·클론 URL(`sourceUrl`)·설치 시각(`installedAt`, `updatedAt`)은 `<base>/.ms-skills-source.json` 한 파일에 모아 기록한다. 이 파일 하나가 그 base 아래 세 위치(`.claude/skills`, `.agents/skills`, `.pi/agent/skills`)의 스킬을 모두 담는다. 실제 체크아웃에서 실행하면 `repoPath`도 함께 남는다. 스킬 폴더 안에는 메타 파일을 만들지 않으므로 원본 파일만 남는다.

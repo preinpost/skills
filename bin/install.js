@@ -22,21 +22,25 @@ const TARGETS = {
 const HELP = `Usage: npx github:preinpost/skills [skill...] [options]
        npx github:preinpost/skills update [skill...] [options]
        npx github:preinpost/skills sync [skill...] [options]
+       npx github:preinpost/skills remove <skill|path...> [options]
 
 Commands:
   update               설치된 스킬 중 내용(hash)이 바뀐 것만 업데이트
                        (-g/-a를 안 주면 현재 디렉터리와 ~ 의 claude/agents/pi 를 모두 찾음)
   sync                 설치본을 직접 고친 스킬을 원본 레포에 커밋·푸시하고
                        같은 스킬의 다른 설치 사본에도 반영 (찾는 범위는 update와 같음)
+  remove               로컬 스킬 디렉터리를 지우고 레지스트리 항목도 뺌 (원본 레포는 건드리지 않음)
+                       (이름이면 update와 같은 범위에서 찾고, 사본이 여럿이면 TUI로 고름.
+                        경로를 주면 그 사본만 바로 지움)
 
 Options:
   -g, --global         홈 디렉터리(~)에 설치 (기본: 현재 디렉터리)
   -a, --agent <name>   설치 대상: ${Object.keys(TARGETS).join(", ")}, all (반복 가능, 기본: claude,agents)
   -l, --list           설치 가능한 스킬 목록
-  -f, --force          이미 있는 스킬 무조건 덮어쓰기 (로컬 수정 포함)
-  -c, --check          update/sync에서 바꾸지 않고 상태만 표시
+  -f, --force          이미 있는 스킬 무조건 덮어쓰기 (로컬 수정 포함), remove에서는 로컬 수정본도 삭제
+  -c, --check          update/sync/remove에서 바꾸지 않고 상태만 표시
   -m, --message <msg>  sync 커밋 메시지 (기본: "sync: <스킬들> (<호스트명>)")
-  -y, --yes            TUI 없이 기본값으로 설치
+  -y, --yes            TUI 없이 기본값으로 설치 (remove는 찾은 사본을 고르지 않고 모두 삭제)
       --no-private     비공개 레포(${PRIVATE_REPO})를 받지 않음
   -h, --help           도움말
 
@@ -54,7 +58,10 @@ Examples:
   npx github:preinpost/skills update              # 바뀐 스킬만 업데이트
   npx github:preinpost/skills update --check      # 업데이트할 것만 확인
   npx github:preinpost/skills sync                # 로컬에서 고친 스킬을 git에 커밋·푸시
-  npx github:preinpost/skills sync --check        # 푸시할 것만 확인`;
+  npx github:preinpost/skills sync --check        # 푸시할 것만 확인
+  npx github:preinpost/skills remove ko-article-html            # 사본이 여럿이면 골라서 삭제
+  npx github:preinpost/skills remove ~/.pi/agent/skills/ko-article-html  # 그 사본만 삭제
+  npx github:preinpost/skills remove ko-article-html --check    # 지울 대상만 확인`;
 
 // Shallow-clone the private repo into a temp dir. Returns null without prompting if there is no access.
 function fetchPrivate() {
@@ -250,7 +257,7 @@ function describe(skill) {
 
 function parseArgs(argv) {
   const opts = { skills: [], agents: [], global: false, force: false, list: false, help: false, yes: false, private: true, check: false };
-  if (argv[0] === "update" || argv[0] === "sync") opts.command = argv.shift();
+  if (["update", "sync", "remove"].includes(argv[0])) opts.command = argv.shift();
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "-g" || a === "--global") opts.global = true;
@@ -382,6 +389,8 @@ async function prompt(opts, available) {
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
   if (opts.help) return console.log(HELP);
+  // remove는 원본 레포가 필요 없다. 레포에서 빠진 스킬도 지울 수 있게 비공개 레포도 받지 않는다.
+  if (opts.command === "remove") return remove(opts);
   const roots = [{ root: ROOT, private: false }];
   const privateRoot = opts.private && fetchPrivate();
   if (privateRoot) roots.push({ root: privateRoot, private: true });
@@ -544,6 +553,80 @@ function sync(opts, available) {
     }
   }
   for (const registry of registries) saveRegistry(registry);
+}
+
+// 레지스트리(또는 구버전 meta)에 기록된 사본만 지운다. 다른 도구로 설치한 폴더는 건드리지 않는다.
+// 로컬에서 수정된 사본은 sync 안 한 변경이 날아갈 수 있어 --force 없이는 건너뛴다.
+async function remove(opts) {
+  if (!opts.skills.length) throw new Error("지울 스킬 이름을 지정하세요 (예: remove ko-article-html)");
+  // 같은 곳을 두 번 보지 않게 realpath로 중복만 거르고, 레지스트리 키와 맞도록 경로는 원래 표기를 쓴다.
+  const real = (p) => fs.realpathSync(p);
+  const bases = opts.global ? [os.homedir()] : opts.explicitAgents ? [process.cwd()]
+    : real(process.cwd()) === real(os.homedir()) ? [os.homedir()] : [process.cwd(), os.homedir()];
+  const agents = opts.explicitAgents ? opts.agents : Object.keys(TARGETS);
+
+  // 경로 인자(/ 포함)는 그 사본 하나, 이름 인자는 찾는 범위의 모든 위치가 후보다.
+  // 경로 사본의 레지스트리는 <base>/<TARGETS[x]>/<name> 에서 base를 거꾸로 구한다.
+  const candidates = [];
+  const registries = new Map();
+  const registryOf = (base) => registries.get(base) || registries.set(base, loadRegistry(base)).get(base);
+  for (const arg of opts.skills) {
+    if (arg.includes("/") || arg.includes(path.sep)) {
+      const dest = path.resolve(expandTilde(arg));
+      const target = Object.values(TARGETS).find((t) => path.dirname(dest).endsWith(path.sep + t));
+      if (!target) throw new Error(`스킬 설치 위치가 아닙니다: ${arg} (${Object.values(TARGETS).join(", ")} 아래 경로)`);
+      if (!fs.existsSync(dest)) throw new Error(`없는 경로: ${arg}`);
+      candidates.push({ name: path.basename(dest), dest, registry: registryOf(path.dirname(dest).slice(0, -target.length - 1)) });
+      continue;
+    }
+    for (const base of bases) for (const agent of agents) {
+      const dest = path.join(base, TARGETS[agent], arg);
+      if (fs.existsSync(dest)) candidates.push({ name: arg, dest, registry: registryOf(base) });
+    }
+  }
+
+  const targets = [];
+  for (const { name, dest, registry } of candidates) {
+    const entry = registry.skills.get(path.resolve(dest));
+    const saved = entry?.hash ?? readLegacyMeta(dest)?.hash;
+    if (!saved) {
+      console.log(`- ${dest} (이 설치기로 설치한 기록 없음, 건너뜀)`);
+      continue;
+    }
+    if (hashDir(dest) !== saved && !opts.force) {
+      console.log(`! ${dest} (로컬에서 수정됨, sync하거나 --force로 삭제)`);
+      continue;
+    }
+    targets.push({ name, dest, registry });
+  }
+  if (!targets.length) return console.log("지울 설치된 스킬이 없습니다.");
+  if (opts.check) {
+    for (const t of targets) console.log(`- ${t.dest} (삭제 예정)`);
+    return;
+  }
+
+  // 사본이 하나면 묻지 않고 지운다. 여럿일 때만 고르게 한다.
+  let picked = targets;
+  if (!opts.yes && targets.length > 1) {
+    if (!(process.stdin.isTTY && process.stdout.isTTY)) {
+      for (const t of targets) console.log(`- ${t.dest}`);
+      throw new Error("사본이 여럿입니다. 경로로 하나를 지정하거나, 모두 지우려면 -y를 붙이세요");
+    }
+    const idx = await select(
+      "삭제할 사본",
+      targets.map((t) => ({ label: tilde(t.dest) })),
+      { multi: true, allowEmpty: true },
+    );
+    picked = idx.map((i) => targets[i]);
+    if (!picked.length) return console.log("선택한 사본이 없습니다.");
+  }
+
+  for (const t of picked) {
+    fs.rmSync(t.dest, { recursive: true, force: true });
+    t.registry.skills.delete(path.resolve(t.dest));
+    console.log(`✗ ${t.dest}`);
+  }
+  for (const registry of registries.values()) saveRegistry(registry);
 }
 
 main().catch((e) => {
