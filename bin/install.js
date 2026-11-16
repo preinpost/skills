@@ -281,7 +281,8 @@ function parseArgs(argv) {
 }
 
 // Minimal arrow-key picker. multi: space toggles, enter confirms. Resolves to selected indices.
-function select(question, items, { multi = false, checked = [], allowEmpty = false } = {}) {
+// pickCursor: multi에서 아무것도 체크하지 않고 enter를 누르면 커서가 있는 항목 하나를 고른다.
+function select(question, items, { multi = false, checked = [], allowEmpty = false, pickCursor = false } = {}) {
   return new Promise((resolve) => {
     const out = process.stdout;
     const on = new Set(checked);
@@ -326,6 +327,7 @@ function select(question, items, { multi = false, checked = [], allowEmpty = fal
         else items.forEach((_, i) => on.add(i));
       } else if (key.name === "return") {
         if (!multi) return done([cur]);
+        if (!on.size && pickCursor) return done([cur]);
         if (on.size || allowEmpty) return done([...on].sort((a, b) => a - b));
         error = "하나 이상 선택하세요";
       }
@@ -615,10 +617,9 @@ async function remove(opts) {
     const idx = await select(
       "삭제할 사본",
       targets.map((t) => ({ label: tilde(t.dest) })),
-      { multi: true, allowEmpty: true },
+      { multi: true, pickCursor: true },
     );
     picked = idx.map((i) => targets[i]);
-    if (!picked.length) return console.log("선택한 사본이 없습니다.");
   }
 
   for (const t of picked) {
