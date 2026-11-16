@@ -650,12 +650,15 @@ function listInstalled(opts) {
     }
   }
   if (!byName.size) return console.log("설치된 스킬이 없습니다.");
-  for (const name of [...byName.keys()].sort()) {
+  // 설치 TUI와 같이 공개 → 비공개 순, 그 안에서는 이름순.
+  const isPrivate = (name) => byName.get(name)[0].source === PRIVATE_REPO;
+  const names = [...byName.keys()].sort((a, b) => isPrivate(a) - isPrivate(b) || a.localeCompare(b));
+  for (const [i, name] of names.entries()) {
     const list = byName.get(name);
-    console.log(`${list[0].source === PRIVATE_REPO ? "🔒 " : ""}${name}`);
+    console.log(`${i + 1}. ${isPrivate(name) ? "🔒 " : ""}${name}`);
     for (const e of list.sort((a, b) => a.dir.localeCompare(b.dir))) {
       const state = !fs.existsSync(e.dir) ? "폴더 없음" : hashDir(e.dir) !== e.hash ? "로컬 수정됨" : e.hash;
-      console.log(`  ${tilde(e.dir)}  (${state}, ${(e.updatedAt || "").slice(0, 10)})`);
+      console.log(`   ${tilde(e.dir)}  (${state}, ${(e.updatedAt || "").slice(0, 10)})`);
     }
   }
 }
