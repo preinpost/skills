@@ -78,6 +78,15 @@ npx github:preinpost/skills remove ko-article-html --check               # 지�
 - 이 설치기로 설치한 기록이 없는 폴더는 건드리지 않는다.
 - 로컬에서 고친 사본은 건너뛴다. 먼저 `sync`하거나 `--force`로 지운다.
 
+### 설치된 스킬 목록 (list)
+
+이 설치기로 설치한 스킬을 이름별로 묶어 위치·hash·갱신일을 보여준다. 로컬에서 고친 사본은 `로컬 수정됨`으로 표시된다. 설치 가능한 스킬 목록은 `-l`이다.
+
+```bash
+npx github:preinpost/skills list                 # ./ 와 ~ 의 claude/agents/pi 전부
+npx github:preinpost/skills list orchestrator -g
+```
+
 ### 원본 저장소 안내
 
 설치한 스킬의 hash·출처(`source`)·클론 URL(`sourceUrl`)·설치 시각(`installedAt`, `updatedAt`)은 `<base>/.ms-skills-source.json` 한 파일에 모아 기록한다. 이 파일 하나가 그 base 아래 세 위치(`.claude/skills`, `.agents/skills`, `.pi/agent/skills`)의 스킬을 모두 담는다. 실제 체크아웃에서 실행하면 `repoPath`도 함께 남는다. 스킬 폴더 안에는 메타 파일을 만들지 않으므로 원본 파일만 남는다.

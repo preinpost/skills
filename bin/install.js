@@ -23,6 +23,7 @@ const HELP = `Usage: npx github:preinpost/skills [skill...] [options]
        npx github:preinpost/skills update [skill...] [options]
        npx github:preinpost/skills sync [skill...] [options]
        npx github:preinpost/skills remove <skill|path...> [options]
+       npx github:preinpost/skills list [skill...] [options]
 
 Commands:
   update               설치된 스킬 중 내용(hash)이 바뀐 것만 업데이트
@@ -32,11 +33,12 @@ Commands:
   remove               로컬 스킬 디렉터리를 지우고 레지스트리 항목도 뺌 (원본 레포는 건드리지 않음)
                        (이름이면 update와 같은 범위에서 찾고, 사본이 여럿이면 TUI로 고름.
                         경로를 주면 그 사본만 바로 지움)
+  list                 이 설치기로 설치한 스킬과 위치를 표시 (찾는 범위는 update와 같음)
 
 Options:
   -g, --global         홈 디렉터리(~)에 설치 (기본: 현재 디렉터리)
   -a, --agent <name>   설치 대상: ${Object.keys(TARGETS).join(", ")}, all (반복 가능, 기본: claude,agents)
-  -l, --list           설치 가능한 스킬 목록
+  -l, --list           설치 가능한 스킬 목록 (설치된 목록은 list 명령)
   -f, --force          이미 있는 스킬 무조건 덮어쓰기 (로컬 수정 포함), remove에서는 로컬 수정본도 삭제
   -c, --check          update/sync/remove에서 바꾸지 않고 상태만 표시
   -m, --message <msg>  sync 커밋 메시지 (기본: "sync: <스킬들> (<호스트명>)")
@@ -61,7 +63,8 @@ Examples:
   npx github:preinpost/skills sync --check        # 푸시할 것만 확인
   npx github:preinpost/skills remove ko-article-html            # 사본이 여럿이면 골라서 삭제
   npx github:preinpost/skills remove ~/.pi/agent/skills/ko-article-html  # 그 사본만 삭제
-  npx github:preinpost/skills remove ko-article-html --check    # 지울 대상만 확인`;
+  npx github:preinpost/skills remove ko-article-html --check    # 지울 대상만 확인
+  npx github:preinpost/skills list                # 설치된 스킬 목록`;
 
 // Shallow-clone the private repo into a temp dir. Returns null without prompting if there is no access.
 function fetchPrivate() {
@@ -257,7 +260,7 @@ function describe(skill) {
 
 function parseArgs(argv) {
   const opts = { skills: [], agents: [], global: false, force: false, list: false, help: false, yes: false, private: true, check: false };
-  if (["update", "sync", "remove"].includes(argv[0])) opts.command = argv.shift();
+  if (["update", "sync", "remove", "list"].includes(argv[0])) opts.command = argv.shift();
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "-g" || a === "--global") opts.global = true;
@@ -393,6 +396,7 @@ async function main() {
   if (opts.help) return console.log(HELP);
   // remove는 원본 레포가 필요 없다. 레포에서 빠진 스킬도 지울 수 있게 비공개 레포도 받지 않는다.
   if (opts.command === "remove") return remove(opts);
+  if (opts.command === "list") return listInstalled(opts);
   const roots = [{ root: ROOT, private: false }];
   const privateRoot = opts.private && fetchPrivate();
   if (privateRoot) roots.push({ root: privateRoot, private: true });
@@ -628,6 +632,32 @@ async function remove(opts) {
     console.log(`✗ ${t.dest}`);
   }
   for (const registry of registries.values()) saveRegistry(registry);
+}
+
+// 레지스트리에 기록된 사본을 스킬 이름별로 묶어 보여준다. 원본 레포는 받지 않으므로
+// 업데이트 여부는 알 수 없고, 기록된 hash와 비교한 로컬 수정·폴더 누락만 표시한다.
+function listInstalled(opts) {
+  const real = (p) => fs.realpathSync(p);
+  const bases = opts.global ? [os.homedir()] : opts.explicitAgents ? [process.cwd()]
+    : real(process.cwd()) === real(os.homedir()) ? [os.homedir()] : [process.cwd(), os.homedir()];
+  const dirs = new Set(bases.flatMap((b) => (opts.explicitAgents ? opts.agents : Object.keys(TARGETS)).map((a) => path.join(b, TARGETS[a]))));
+  const byName = new Map();
+  for (const base of bases) {
+    for (const e of loadRegistry(base).skills.values()) {
+      if (!dirs.has(path.dirname(e.dir)) || (opts.skills.length && !opts.skills.includes(e.name))) continue;
+      if (!byName.has(e.name)) byName.set(e.name, []);
+      byName.get(e.name).push(e);
+    }
+  }
+  if (!byName.size) return console.log("설치된 스킬이 없습니다.");
+  for (const name of [...byName.keys()].sort()) {
+    const list = byName.get(name);
+    console.log(`${list[0].source === PRIVATE_REPO ? "🔒 " : ""}${name}`);
+    for (const e of list.sort((a, b) => a.dir.localeCompare(b.dir))) {
+      const state = !fs.existsSync(e.dir) ? "폴더 없음" : hashDir(e.dir) !== e.hash ? "로컬 수정됨" : e.hash;
+      console.log(`  ${tilde(e.dir)}  (${state}, ${(e.updatedAt || "").slice(0, 10)})`);
+    }
+  }
 }
 
 main().catch((e) => {
