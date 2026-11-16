@@ -350,7 +350,7 @@ async function prompt(opts, available) {
     const idx = await select(
       priv ? "설치할 비공개 스킬" : "설치할 공개 스킬",
       names.map((n) => ({ label: label(n, available.get(n)) })),
-      { multi: true, checked: names.map((_, i) => i), allowEmpty: true },
+      { multi: true, allowEmpty: true },
     );
     opts.skills.push(...idx.map((i) => names[i]));
   }
