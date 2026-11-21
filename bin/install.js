@@ -13,11 +13,38 @@ const PRIVATE_REPO = process.env.SKILLS_PRIVATE_REPO || "preinpost/skills-privat
 const LEGACY_META = ".skill-meta.json";
 const SOURCE_FILE = ".ms-skills-source.json";
 const IGNORE = /(__pycache__|\.pyc$|\.DS_Store$)/;
+// 프로젝트(로컬)와 전역(~) 경로가 다른 에이전트는 { local, global } 객체로 적는다.
 const TARGETS = {
   claude: ".claude/skills",
   agents: ".agents/skills",
   pi: ".pi/agent/skills",
+  antigravity: { local: ".agents/skills", global: ".gemini/config/skills" },
 };
+
+function targetRel(agent, global) {
+  const t = TARGETS[agent];
+  return typeof t === "string" ? t : global ? t.global : t.local;
+}
+
+function allTargetRels() {
+  return [...new Set(Object.values(TARGETS).flatMap((t) => (typeof t === "string" ? [t] : [t.local, t.global])))];
+}
+
+function targetDirs(base, global, agents) {
+  return [...new Set(agents.map((a) => path.resolve(base, targetRel(a, global))))];
+}
+
+// update/sync/remove/list가 찾는 (base, global) 쌍. 같은 곳을 두 번 보지 않게 realpath로 중복만 거른다.
+function scopes(opts) {
+  const real = (p) => fs.realpathSync(p);
+  if (opts.global) return [{ base: os.homedir(), global: true }];
+  if (opts.explicitAgents) return [{ base: process.cwd(), global: false }];
+  if (real(process.cwd()) === real(os.homedir())) return [{ base: os.homedir(), global: true }];
+  return [
+    { base: process.cwd(), global: false },
+    { base: os.homedir(), global: true },
+  ];
+}
 
 const HELP = `Usage: npx github:preinpost/skills [skill...] [options]
        npx github:preinpost/skills update [skill...] [options]
@@ -27,7 +54,7 @@ const HELP = `Usage: npx github:preinpost/skills [skill...] [options]
 
 Commands:
   update               설치된 스킬 중 내용(hash)이 바뀐 것만 업데이트
-                       (-g/-a를 안 주면 현재 디렉터리와 ~ 의 claude/agents/pi 를 모두 찾음)
+                       (-g/-a를 안 주면 현재 디렉터리와 ~ 의 ${Object.keys(TARGETS).join("/")} 를 모두 찾음)
   sync                 설치본을 직접 고친 스킬을 원본 레포에 커밋·푸시하고
                        같은 스킬의 다른 설치 사본에도 반영 (찾는 범위는 update와 같음)
   remove               로컬 스킬 디렉터리를 지우고 레지스트리 항목도 뺌 (원본 레포는 건드리지 않음)
@@ -57,6 +84,7 @@ Examples:
   npx github:preinpost/skills -y                  # 모든 스킬을 ./.claude/skills, ./.agents/skills 에
   npx github:preinpost/skills orchestrator -g     # ~/.claude/skills, ~/.agents/skills 에
   npx github:preinpost/skills -a pi -g            # ~/.pi/agent/skills 에
+  npx github:preinpost/skills -a antigravity -g   # ~/.gemini/config/skills 에 (프로젝트는 ./.agents/skills)
   npx github:preinpost/skills update              # 바뀐 스킬만 업데이트
   npx github:preinpost/skills update --check      # 업데이트할 것만 확인
   npx github:preinpost/skills sync                # 로컬에서 고친 스킬을 git에 커밋·푸시
@@ -141,7 +169,7 @@ function expandTilde(p) {
   return p;
 }
 
-// <base>/.ms-skills-source.json 한 파일이 그 base 아래 세 위치의 스킬을 모두 담는다.
+// <base>/.ms-skills-source.json 한 파일이 그 base 아래 모든 위치의 스킬을 담는다.
 // base는 전역이면 홈, 프로젝트 설치면 현재 디렉터리다. `ms-` 접두사는 사용자 본인이 관리하는 파일임을 표시한다.
 function loadRegistry(base) {
   const file = path.join(base, SOURCE_FILE);
@@ -372,13 +400,13 @@ async function prompt(opts, available) {
   const agents = Object.keys(TARGETS);
   const agentIdx = await select(
     "설치 위치",
-    agents.map((n) => ({ label: n, hint: `${base}/${TARGETS[n]}` })),
+    agents.map((n) => ({ label: n, hint: `${base}/${targetRel(n, opts.global)}` })),
     { multi: true },
   );
   opts.agents = agentIdx.map((i) => agents[i]);
 
-  const exists = opts.agents.some((a) =>
-    opts.skills.some((s) => fs.existsSync(path.join(opts.global ? os.homedir() : process.cwd(), TARGETS[a], s))),
+  const exists = targetDirs(opts.global ? os.homedir() : process.cwd(), opts.global, opts.agents).some((dir) =>
+    opts.skills.some((s) => fs.existsSync(path.join(dir, s))),
   );
   if (exists) {
     const [ow] = await select("이미 설치된 스킬이 있습니다", [
@@ -417,8 +445,7 @@ async function main() {
 
   const base = opts.global ? os.homedir() : process.cwd();
   const registry = loadRegistry(base);
-  for (const agent of opts.agents) {
-    const dir = path.join(base, TARGETS[agent]);
+  for (const dir of targetDirs(base, opts.global, opts.agents)) {
     fs.mkdirSync(dir, { recursive: true });
     for (const skill of skills) {
       installSkill(skill, available.get(skill), path.join(dir, skill), { mode, registry });
@@ -429,15 +456,13 @@ async function main() {
 
 // Find installed copies of known skills and refresh the ones whose hash differs from the source.
 function update(opts, available) {
-  const bases = opts.global ? [os.homedir()] : opts.explicitAgents ? [process.cwd()] : [...new Set([process.cwd(), os.homedir()])];
   const agents = opts.explicitAgents ? opts.agents : Object.keys(TARGETS);
   const missing = opts.skills.filter((s) => !available.has(s));
   if (missing.length) throw new Error(`없는 스킬: ${missing.join(", ")}`);
   let found = 0;
-  for (const base of bases) {
+  for (const { base, global } of scopes(opts)) {
     const registry = loadRegistry(base);
-    for (const agent of agents) {
-      const dir = path.join(base, TARGETS[agent]);
+    for (const dir of targetDirs(base, global, agents)) {
       if (!fs.existsSync(dir)) continue;
       for (const name of fs.readdirSync(dir).sort()) {
         if (!available.has(name) || (opts.skills.length && !opts.skills.includes(name))) continue;
@@ -478,8 +503,6 @@ function cloneForPush(repo) {
 // 원본도 설치 이후 바뀌었으면 양쪽 수정이므로 --force 없이는 건너뛴다.
 // 푸시 후에는 같은 스킬의 다른 설치 사본도 새 내용으로 맞추고 레지스트리 hash를 갱신한다.
 function sync(opts, available) {
-  const real = (p) => fs.realpathSync(p);
-  const bases = opts.global ? [os.homedir()] : opts.explicitAgents ? [process.cwd()] : [...new Set([real(process.cwd()), real(os.homedir())])];
   const agents = opts.explicitAgents ? opts.agents : Object.keys(TARGETS);
   const missing = opts.skills.filter((s) => !available.has(s));
   if (missing.length) throw new Error(`없는 스킬: ${missing.join(", ")}`);
@@ -487,11 +510,10 @@ function sync(opts, available) {
   // name -> [{ dest, registry, saved, cur }]
   const copies = new Map();
   const registries = [];
-  for (const base of bases) {
+  for (const { base, global } of scopes(opts)) {
     const registry = loadRegistry(base);
     registries.push(registry);
-    for (const agent of agents) {
-      const dir = path.join(base, TARGETS[agent]);
+    for (const dir of targetDirs(base, global, agents)) {
       if (!fs.existsSync(dir)) continue;
       for (const name of fs.readdirSync(dir).sort()) {
         if (!available.has(name) || (opts.skills.length && !opts.skills.includes(name))) continue;
@@ -565,28 +587,26 @@ function sync(opts, available) {
 // 로컬에서 수정된 사본은 sync 안 한 변경이 날아갈 수 있어 --force 없이는 건너뛴다.
 async function remove(opts) {
   if (!opts.skills.length) throw new Error("지울 스킬 이름을 지정하세요 (예: remove ko-article-html)");
-  // 같은 곳을 두 번 보지 않게 realpath로 중복만 거르고, 레지스트리 키와 맞도록 경로는 원래 표기를 쓴다.
-  const real = (p) => fs.realpathSync(p);
-  const bases = opts.global ? [os.homedir()] : opts.explicitAgents ? [process.cwd()]
-    : real(process.cwd()) === real(os.homedir()) ? [os.homedir()] : [process.cwd(), os.homedir()];
+  const scopeList = scopes(opts);
   const agents = opts.explicitAgents ? opts.agents : Object.keys(TARGETS);
 
   // 경로 인자(/ 포함)는 그 사본 하나, 이름 인자는 찾는 범위의 모든 위치가 후보다.
-  // 경로 사본의 레지스트리는 <base>/<TARGETS[x]>/<name> 에서 base를 거꾸로 구한다.
+  // 경로 사본의 레지스트리는 <base>/<target>/<name> 에서 base를 거꾸로 구한다.
   const candidates = [];
   const registries = new Map();
   const registryOf = (base) => registries.get(base) || registries.set(base, loadRegistry(base)).get(base);
+  const rels = allTargetRels();
   for (const arg of opts.skills) {
     if (arg.includes("/") || arg.includes(path.sep)) {
       const dest = path.resolve(expandTilde(arg));
-      const target = Object.values(TARGETS).find((t) => path.dirname(dest).endsWith(path.sep + t));
-      if (!target) throw new Error(`스킬 설치 위치가 아닙니다: ${arg} (${Object.values(TARGETS).join(", ")} 아래 경로)`);
+      const target = rels.find((t) => path.dirname(dest).endsWith(path.sep + path.normalize(t)));
+      if (!target) throw new Error(`스킬 설치 위치가 아닙니다: ${arg} (${rels.join(", ")} 아래 경로)`);
       if (!fs.existsSync(dest)) throw new Error(`없는 경로: ${arg}`);
-      candidates.push({ name: path.basename(dest), dest, registry: registryOf(path.dirname(dest).slice(0, -target.length - 1)) });
+      candidates.push({ name: path.basename(dest), dest, registry: registryOf(path.dirname(dest).slice(0, -path.normalize(target).length - 1)) });
       continue;
     }
-    for (const base of bases) for (const agent of agents) {
-      const dest = path.join(base, TARGETS[agent], arg);
+    for (const { base, global } of scopeList) for (const dir of targetDirs(base, global, agents)) {
+      const dest = path.join(dir, arg);
       if (fs.existsSync(dest)) candidates.push({ name: arg, dest, registry: registryOf(base) });
     }
   }
@@ -637,12 +657,11 @@ async function remove(opts) {
 // 레지스트리에 기록된 사본을 스킬 이름별로 묶어 보여준다. 원본 레포는 받지 않으므로
 // 업데이트 여부는 알 수 없고, 기록된 hash와 비교한 로컬 수정·폴더 누락만 표시한다.
 function listInstalled(opts) {
-  const real = (p) => fs.realpathSync(p);
-  const bases = opts.global ? [os.homedir()] : opts.explicitAgents ? [process.cwd()]
-    : real(process.cwd()) === real(os.homedir()) ? [os.homedir()] : [process.cwd(), os.homedir()];
-  const dirs = new Set(bases.flatMap((b) => (opts.explicitAgents ? opts.agents : Object.keys(TARGETS)).map((a) => path.join(b, TARGETS[a]))));
+  const scopeList = scopes(opts);
+  const agents = opts.explicitAgents ? opts.agents : Object.keys(TARGETS);
+  const dirs = new Set(scopeList.flatMap(({ base, global }) => targetDirs(base, global, agents)));
   const byName = new Map();
-  for (const base of bases) {
+  for (const { base } of scopeList) {
     for (const e of loadRegistry(base).skills.values()) {
       if (!dirs.has(path.dirname(e.dir)) || (opts.skills.length && !opts.skills.includes(e.name))) continue;
       if (!byName.has(e.name)) byName.set(e.name, []);

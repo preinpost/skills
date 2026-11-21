@@ -1,7 +1,7 @@
 {
   "name": "preinpost-skills",
   "version": "0.1.0",
-  "description": "Personal agent skills installer (Claude Code, Codex, Pi, ...)",
+  "description": "Personal agent skills installer (Claude Code, Codex, Pi, Antigravity, ...)",
   "bin": { "preinpost-skills": "bin/install.js" },
   "files": ["bin", "*/SKILL.md", "*/references", "*/scripts", "*/assets"],
   "engines": { "node": ">=18" },

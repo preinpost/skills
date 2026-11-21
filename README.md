@@ -1,6 +1,6 @@
 # skills
 
-개인용 에이전트 스킬 모음. Pi(`~/.pi/agent/skills`), Claude Code, Codex 등에서 같은 형식(`SKILL.md` + `references/` + `scripts/`)으로 쓸 수 있게 관리한다.
+개인용 에이전트 스킬 모음. Pi(`~/.pi/agent/skills`), Claude Code, Codex, Antigravity(`~/.gemini/config/skills`, 프로젝트 `.agents/skills`) 등에서 같은 형식(`SKILL.md` + `references/` + `scripts/`)으로 쓸 수 있게 관리한다.
 
 ## 목록
 
@@ -16,7 +16,7 @@
 Node 18+만 있으면 된다. 별도 npm 배포 없이 GitHub에서 바로 실행한다.
 
 ```bash
-# TUI로 스킬 · 범위(프로젝트/전역) · 위치(claude/agents/pi, 직접 체크) 선택
+# TUI로 스킬 · 범위(프로젝트/전역) · 위치(claude/agents/pi/antigravity, 직접 체크) 선택
 npx github:preinpost/skills
 
 # 묻지 않고 모든 스킬을 ./.claude/skills, ./.agents/skills 에 설치
@@ -25,9 +25,10 @@ npx github:preinpost/skills -y
 # 홈(~/.claude/skills, ~/.agents/skills)에 전역 설치
 npx github:preinpost/skills -g
 
-# 특정 스킬만 / 특정 에이전트만 (claude, agents, pi, all)
+# 특정 스킬만 / 특정 에이전트만 (claude, agents, pi, antigravity, all)
 npx github:preinpost/skills orchestrator -a claude -g
-npx github:preinpost/skills -a pi -g          # ~/.pi/agent/skills
+npx github:preinpost/skills -a pi -g           # ~/.pi/agent/skills
+npx github:preinpost/skills -a antigravity -g  # ~/.gemini/config/skills (프로젝트는 ./.agents/skills)
 
 # 목록 보기, 덮어쓰기
 npx github:preinpost/skills --list
@@ -41,7 +42,7 @@ npx github:preinpost/skills -g --force
 설치·업데이트할 때 스킬 디렉터리 내용의 sha256 hash를 `<base>/.ms-skills-source.json`에 기록해 둔다. `base`는 전역 설치면 홈(`~`), 프로젝트 설치는 현재 디렉터리다. `update`는 이 hash와 레포의 현재 hash를 비교해서 바뀐 스킬만 다시 설치한다.
 
 ```bash
-npx github:preinpost/skills update            # ./ 와 ~ 의 claude/agents/pi 전부 확인 후 바뀐 것만 업데이트
+npx github:preinpost/skills update            # ./ 와 ~ 의 claude/agents/pi/antigravity 전부 확인 후 바뀐 것만 업데이트
 npx github:preinpost/skills update --check    # 확인만 (바꾸지 않음)
 npx github:preinpost/skills update orchestrator -g
 ```
@@ -59,7 +60,7 @@ npx github:preinpost/skills sync              # 커밋·푸시 (🔒 스킬은 �
 npx github:preinpost/skills sync orchestrator -m "orchestrator: 규칙 추가"
 ```
 
-- 레지스트리 hash와 현재 내용이 다른 스킬만 올린다. 푸시 후 같은 스킬의 다른 사본(claude/agents/pi)도 맞추고 hash를 갱신한다.
+- 레지스트리 hash와 현재 내용이 다른 스킬만 올린다. 푸시 후 같은 스킬의 다른 사본(claude/agents/pi/antigravity)도 맞추고 hash를 갱신한다.
 - 원본도 설치 이후 바뀌었으면(양쪽 수정) 건너뛴다. 먼저 `update`로 받거나 `--force`로 로컬 내용을 올린다.
 - 같은 스킬의 사본들이 서로 다르게 수정됐으면 건너뛴다.
 - 푸시 권한은 SSH 키 또는 `gh auth login`을 쓴다.
@@ -74,7 +75,7 @@ npx github:preinpost/skills remove ~/.pi/agent/skills/ko-article-html   # 경로
 npx github:preinpost/skills remove ko-article-html --check               # 지울 대상만 확인
 ```
 
-- 이름으로 주면 `update`와 같은 범위(./ 와 ~ 의 claude/agents/pi)에서 찾는다. 사본이 여럿인데 터미널이 아니면 멈추며, 모두 지우려면 `-y`를 붙인다.
+- 이름으로 주면 `update`와 같은 범위(./ 와 ~ 의 claude/agents/pi/antigravity)에서 찾는다. 사본이 여럿인데 터미널이 아니면 멈추며, 모두 지우려면 `-y`를 붙인다.
 - 이 설치기로 설치한 기록이 없는 폴더는 건드리지 않는다.
 - 로컬에서 고친 사본은 건너뛴다. 먼저 `sync`하거나 `--force`로 지운다.
 
@@ -83,13 +84,13 @@ npx github:preinpost/skills remove ko-article-html --check               # 지�
 이 설치기로 설치한 스킬을 이름별로 묶어 위치·hash·갱신일을 보여준다. 로컬에서 고친 사본은 `로컬 수정됨`으로 표시된다. 설치 가능한 스킬 목록은 `-l`이다.
 
 ```bash
-npx github:preinpost/skills list                 # ./ 와 ~ 의 claude/agents/pi 전부
+npx github:preinpost/skills list                 # ./ 와 ~ 의 claude/agents/pi/antigravity 전부
 npx github:preinpost/skills list orchestrator -g
 ```
 
 ### 원본 저장소 안내
 
-설치한 스킬의 hash·출처(`source`)·클론 URL(`sourceUrl`)·설치 시각(`installedAt`, `updatedAt`)은 `<base>/.ms-skills-source.json` 한 파일에 모아 기록한다. 이 파일 하나가 그 base 아래 세 위치(`.claude/skills`, `.agents/skills`, `.pi/agent/skills`)의 스킬을 모두 담는다. 실제 체크아웃에서 실행하면 `repoPath`도 함께 남는다. 스킬 폴더 안에는 메타 파일을 만들지 않으므로 원본 파일만 남는다.
+설치한 스킬의 hash·출처(`source`)·클론 URL(`sourceUrl`)·설치 시각(`installedAt`, `updatedAt`)은 `<base>/.ms-skills-source.json` 한 파일에 모아 기록한다. 이 파일 하나가 그 base 아래 모든 위치(`.claude/skills`, `.agents/skills`, `.pi/agent/skills`, 전역 `.gemini/config/skills`)의 스킬을 모두 담는다. 실제 체크아웃에서 실행하면 `repoPath`도 함께 남는다. 스킬 폴더 안에는 메타 파일을 만들지 않으므로 원본 파일만 남는다.
 항목의 `installedAt`은 최초 설치 시각, `updatedAt`은 마지막으로 내용을 덮어쓴 시각이며, 복사 없이 hash만 갱신할 때는 둘 다 바뀌지 않는다.
 예전 버전이 스킬 폴더에 남긴 `<스킬>/.skill-meta.json`은 따로 지우지 않고, 레지스트리에 항목이 없을 때 로컬 수정 판별용 fallback으로만 읽는다. 이 설치기가 설치·갱신한 스킬만 기록하며, 다른 도구(예: `npx skills`)로 설치한 스킬은 이 파일에 나오지 않는다. 이 설치기는 `AGENTS.md`, `CLAUDE.md` 같은 사용자 소유 지침 파일은 쓰지 않는다. 스킬을 고칠 때는 레지스트리의 정보로 원본 저장소를 찾아 수정하고 커밋한 뒤 사본에 반영한다.
 
