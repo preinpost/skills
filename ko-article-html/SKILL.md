@@ -1,7 +1,7 @@
 ---
 name: ko-article-html
 description: Turn a web article into a complete Korean translation packaged as one self-contained HTML file for team sharing, keeping the original figures and animated demos inline. Use when the user asks to translate a URL or blog post fully into Korean and hand it over as HTML, e.g. "이 글 전체 번역해서 팀에 공유할 HTML로 만들어줘", "아티클 번역 HTML", "원문 그대로 그림까지 넣어서 한국어 문서로", "번역본 만들어서 파일로 줘".
-compatibility: Python 3.9+, curl, ffmpeg/ffprobe for animated figures.
+compatibility: Python 3.9+, curl, ffmpeg/ffprobe for animated figures, gh (optional, for secret gist sharing).
 ---
 
 # 원문 아티클 → 한국어 단일 HTML
@@ -12,7 +12,7 @@ compatibility: Python 3.9+, curl, ffmpeg/ffprobe for animated figures.
 
 - `<slug>-ko.html` 파일 하나. 이미지·영상·스타일이 전부 내장되어 오프라인에서도 열린다.
 - 표지(제목·리드·필자·날짜·핵심 수치) → 목차 → 본문 → 각주 → 출처 푸터.
-- 다크 모드, 모바일, 인쇄, 각주 상호 이동, 읽기 진행률이 동작한다.
+- Pretendard Variable(오프라인 시 시스템 한글 폰트 폴백), 다크 모드, 글자 크기 3단계 조절(`가- / 가 / 가+`), 모바일 접이식 목차 및 데스크톱 우측 sticky 목차, 이미지 라이트박스 확대, 각주 인라인 팝오버, 인쇄, 읽기 진행률이 동작한다.
 - 상단에 "비공식 번역본" 안내를 반드시 넣는다.
 
 ## 준비
@@ -73,7 +73,7 @@ cp "$SKILL/assets/template.html" page.html
 | `{{BYLINE}}` | 필자 (원문 표기) |
 | `{{DATE}}` / `{{READ_TIME}}` | `2026년 10월 22일` / 본문 글자수 ÷ 700 |
 | `{{SOURCE_URL}}` / `{{SOURCE_TITLE}}` / `{{SOURCE_META}}` | 원문 링크, 원제, `(매체, 날짜)` |
-| `{{STATS}}` | 핵심 수치 카드 3~4개. 원문에 근거가 있는 숫자만 |
+| `{{STATS}}` | 핵심 수치 카드 2~4개. 원문에 근거가 있는 숫자만 |
 | `{{TOC}}` | `<li><a href="#id">…</a></li>` 목록 |
 | `{{NOTICE}}` | 번역 안내 문구 |
 | `{{BODY}}` | 번역 본문 (그림 포함) |
@@ -81,7 +81,7 @@ cp "$SKILL/assets/template.html" page.html
 | `{{DISCLAIMER}}` | 비공식 번역·저작권 안내 |
 
 본문 각주는 `<sup class="fn"><a href="#fn-1" id="ref-1">1</a></sup>`로 쓰고 목록의 `id`와 짝을 맞춘다.
-그림은 `<figure class="bleed">` 안에 넣고 `<figcaption><span class="fig-label">그림 1</span>…</figcaption>`로 캡션을 단다. 지면(760px)보다 넓게 퍼지는 것이 이 디자인의 핵심이다.
+그림은 `<figure class="bleed">` (또는 `<figure>`) 안에 넣고 `<figcaption><span class="fig-label">그림 1</span>…</figcaption>`로 캡션을 단다. 본문과 그림 모두 동일한 컨테이너 폭(`720px`)의 좌우 끝선에 맞춰 정렬되며, 정지 이미지는 클릭 시 라이트박스로 확대된다.
 
 ### 4. 빌드
 
@@ -100,13 +100,26 @@ python3 "$SKILL/scripts/check.py" article-ko.html
 ```
 
 - ERROR는 0으로 만든다. 남은 슬롯, 네트워크를 가리키는 미디어, 깨진 내부 링크, 닫히지 않은 태그를 잡는다.
-- 브라우저로 390px 폭과 데스크톱을 확인한다. 가로 스크롤이 없어야 하고, 그림이 화면에 들어올 때 한 번 재생되며, 다크 모드에서 캡션 대비가 유지되어야 한다.
+- 브라우저로 390px 폭과 데스크톱을 확인한다. 가로 스크롤이 없어야 하고, 본문과 그림의 좌우 끝선이 일치해야 하며, 그림 클릭 확대·각주 팝오버·글자 크기 조절·다크 모드 대비가 정상 동작해야 한다.
 - `file://`로 직접 열어도 동작하는지 확인한다. 모든 자산이 내장되어 있으므로 서버가 필요 없다.
-- 영상 시킹이 되는지 확인한다. base64를 Blob URL로 바꾸는 처리가 들어 있으니, 재생바를 끌어 위치를 옮겨 본다.
+- 영상이 있으면 시킹이 되는지 확인한다. base64를 Blob URL로 바꾸는 처리가 들어 있으니, 재생바를 끌어 위치를 옮겨 본다.
 
-### 6. 전달
+### 6. 전달 및 Secret Gist 공유
 
-파일 경로, 크기, 포함한 그림 수를 한두 줄로 알린다. 본문 내용을 채팅에 다시 붙이지 않는다. "비공식 번역"임을 한 번 더 밝힌다.
+1. 파일 경로, 크기, 포함한 그림 수를 한두 줄로 알린다. 본문 내용을 채팅에 다시 붙이지 않는다. "비공식 번역"임을 한 번 더 밝힌다.
+2. 전달 전에 `gh auth status >/dev/null 2>&1`로 `gh` 설치 및 인증 여부를 조용히 확인한다.
+   - `gh`가 없거나 인증되어 있지 않으면 Gist 공유 여부를 **묻지 않고** 그대로 마무리한다.
+   - 인증되어 있는 경우에만 전달 마지막에 **사용자의 GitHub Secret Gist에 올릴지 물어본다.** 승인 전에는 절대 자동으로 업로드하지 않는다.
+3. 사용자가 승인하면 `--public` 없이 기본값(secret)으로 생성하고, `raw.githack.com` 규칙(`gist.githubusercontent.com` → `gist.githack.com`)으로 바로 렌더링되는 링크를 함께 뽑는다.
+
+```bash
+GIST_URL=$(gh gist create <slug>-ko.html -d "<번역 제목> (비공식 한국어 번역)")
+GIST_ID="${GIST_URL##*/}"
+RAW_URL=$(gh api "gists/$GIST_ID" --jq '.files[].raw_url')
+GITHACK_URL="${RAW_URL/gist.githubusercontent.com/gist.githack.com}"
+```
+
+   - 생성된 **Secret Gist URL**(`$GIST_URL`)과 바로 렌더링된 HTML을 볼 수 있는 **raw.githack.com 링크**(`$GITHACK_URL`)를 함께 출력한다.
 
 ## 하지 말 것
 
@@ -115,6 +128,7 @@ python3 "$SKILL/scripts/check.py" article-ko.html
 - 영상 여러 개를 무제한으로 넣지 않는다. 12MB를 넘으면 메일·메신저에서 열리지 않는다.
 - 각주 번호를 손으로 세지 않는다. `check.py`가 내부 링크를 검사하므로 어긋나면 바로 드러난다.
 - 원문에 없는 해설이나 평가를 본문에 섞지 않는다. 해설이 필요하면 상단 안내나 푸터에 분리해 적는다.
+- 사용자 승인 없이 `gh gist create`를 실행하거나 `--public` 플래그로 공개 Gist를 만들지 않는다.
 
 ## 참고 파일
 
