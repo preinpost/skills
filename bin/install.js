@@ -69,6 +69,7 @@ Options:
   -f, --force          이미 있는 스킬 무조건 덮어쓰기 (로컬 수정 포함), remove에서는 로컬 수정본도 삭제
   -c, --check          update/sync/remove에서 바꾸지 않고 상태만 표시
   -m, --message <msg>  sync 커밋 메시지 (기본: "sync: <스킬들> (<호스트명>)")
+  -v, --verbose        update에서 최신인 스킬도 사본별로 펼쳐 표시
   -y, --yes            TUI 없이 기본값으로 설치 (remove는 찾은 사본을 고르지 않고 모두 삭제)
       --no-private     비공개 레포(${PRIVATE_REPO})를 받지 않음
   -h, --help           도움말
@@ -239,13 +240,13 @@ function saveRegistry(registry) {
 // 기존 hash는 레지스트리에서 읽고, 항목이 없으면 구버전 .skill-meta.json을 fallback으로 쓴다.
 // 원본과 같으면 최신, 저장된 hash와 현재 hash가 다르면 로컬 수정으로 보고 건너뛴다. 그 외에는 덮어쓴다.
 function installSkill(name, skill, dest, { mode, check = false, registry }) {
-  const lock = skill.private ? " 🔒" : "";
   const src = hashDir(skill.dir);
   const entry = registry.skills.get(path.resolve(dest));
   const legacy = entry ? null : readLegacyMeta(dest);
   const savedHash = entry?.hash ?? legacy?.hash;
   const installedAt = entry?.installedAt ?? legacy?.installedAt;
   const updatedAt = entry?.updatedAt ?? legacy?.updatedAt ?? legacy?.installedAt;
+  const res = (state, extra = {}) => ({ name, skill, dest, src, state, ...extra });
   // copied=true는 내용을 실제로 복사한 경우다. 그때만 updatedAt을 now로 올린다.
   const record = (hash, copied = false) => {
     if (check) return;
@@ -253,27 +254,86 @@ function installSkill(name, skill, dest, { mode, check = false, registry }) {
     putEntry(registry, name, dest, hash, skill, installedAt || stamp, stamp || updatedAt);
   };
   if (!fs.existsSync(dest)) {
-    if (check) return console.log(`+ ${dest} (미설치)`);
+    if (check) return res("missing");
     copySkill(skill, dest);
     record(src, true);
-    return console.log(`✓ ${dest}${lock}`);
+    return res("installed");
   }
-  if (mode === "skip") return console.log(`- skip  ${dest} (이미 있음)`);
+  if (mode === "skip") return res("skipped");
   const cur = hashDir(dest);
   if (mode !== "force") {
     if (cur === src) {
       if (entry || legacy) record(src); // hash만 갱신하거나 구버전 meta를 레지스트리로 옮긴다
-      return console.log(`= ${dest} (최신 ${src})`);
+      return res("latest");
     }
-    if (savedHash && savedHash !== cur) {
-      return console.log(`! ${dest} (로컬에서 수정됨, --force로 덮어쓰기)`);
-    }
+    if (savedHash && savedHash !== cur) return res("modified", { cur });
   }
   const from = savedHash || cur;
-  if (check) return console.log(`↑ ${dest} (${from} → ${src}, 업데이트 가능)`);
+  if (check) return res("outdated", { from });
   copySkill(skill, dest);
   record(src, true);
-  console.log(`↑ ${dest}${lock} (${from} → ${src})`);
+  return res("updated", { from });
+}
+
+// 설치 위치(dest)의 하네스 이름. .agents/skills 처럼 여럿이 공유하는 경로는 먼저 나온 이름을 쓴다.
+function agentOf(dest) {
+  const parent = path.dirname(dest);
+  for (const [agent, t] of Object.entries(TARGETS)) {
+    for (const rel of typeof t === "string" ? [t] : [t.local, t.global]) {
+      if (parent.endsWith(path.sep + path.normalize(rel))) return agent;
+    }
+  }
+  return "?";
+}
+
+// 표시용 경로: 현재 디렉터리 아래면 ./, 홈 아래면 ~
+function shortPath(p) {
+  const cwd = process.cwd();
+  if (cwd !== os.homedir() && p.startsWith(cwd + path.sep)) return `.${p.slice(cwd.length)}`;
+  return tilde(p);
+}
+
+// 상태별 기호·심각도·설명. 스킬 전체 상태는 사본 중 가장 심각한 것으로 정한다.
+const STATES = {
+  latest: { mark: "=", rank: 0 },
+  skipped: { mark: "-", rank: 1, note: "이미 있음, 건너뜀" },
+  installed: { mark: "✓", rank: 2, note: "설치함" },
+  updated: { mark: "↑", rank: 3, note: (r) => `${r.from} → ${r.src}` },
+  outdated: { mark: "↑", rank: 4, note: (r) => `${r.from} → ${r.src}, 업데이트 가능` },
+  missing: { mark: "+", rank: 5, note: "미설치" },
+  modified: { mark: "!", rank: 6, note: "로컬에서 수정됨" },
+};
+
+// installSkill 결과를 스킬별로 묶어 출력한다. 모든 사본이 최신이면 한 줄로 접는다(verbose면 펼침).
+function report(results, { verbose = false } = {}) {
+  const byName = new Map();
+  for (const r of results) {
+    if (!byName.has(r.name)) byName.set(r.name, []);
+    byName.get(r.name).push(r);
+  }
+  const width = Math.max(0, ...[...byName.keys()].map((n) => n.length));
+  const agentWidth = Math.max(0, ...results.map((r) => agentOf(r.dest).length));
+  const hints = new Set();
+  for (const [name, list] of byName) {
+    const worst = list.reduce((a, b) => (STATES[b.state].rank > STATES[a.state].rank ? b : a));
+    const lock = list[0].skill.private ? " 🔒" : "";
+    const count = `${list.length}곳`;
+    const head = `${STATES[worst.state].mark} ${name.padEnd(width)}  ${list[0].src}  (${count})${lock}`;
+    console.log(head);
+    const uniform = list.every((r) => r.state === worst.state);
+    if (uniform && worst.state === "latest" && !verbose) continue;
+    for (const r of list) {
+      const st = STATES[r.state];
+      const note = typeof st.note === "function" ? st.note(r) : st.note;
+      console.log(`    ${st.mark} ${agentOf(r.dest).padEnd(agentWidth)}  ${shortPath(r.dest)}${note ? `  ${note}` : ""}`);
+    }
+    if (list.some((r) => r.state === "modified")) hints.add(`${name}: 로컬 수정 있음 → \`sync\`로 올려 다른 사본에도 전파, 또는 \`update --force\`로 덮어쓰기`);
+    if (list.some((r) => r.state === "outdated")) hints.add(`${name}: 원본이 바뀜 → \`update\``);
+  }
+  if (hints.size) {
+    console.log();
+    for (const h of hints) console.log(`→ ${h}`);
+  }
 }
 
 function label(name, skill) {
@@ -296,6 +356,7 @@ function parseArgs(argv) {
     else if (a === "-l" || a === "--list") opts.list = true;
     else if (a === "-c" || a === "--check") opts.check = true;
     else if (a === "-y" || a === "--yes") opts.yes = true;
+    else if (a === "-v" || a === "--verbose") opts.verbose = true;
     else if (a === "-h" || a === "--help") opts.help = true;
     else if (a === "--no-private") opts.private = false;
     else if (a === "-m" || a === "--message") opts.message = argv[++i];
@@ -445,13 +506,16 @@ async function main() {
 
   const base = opts.global ? os.homedir() : process.cwd();
   const registry = loadRegistry(base);
+  const results = [];
   for (const dir of targetDirs(base, opts.global, opts.agents)) {
     fs.mkdirSync(dir, { recursive: true });
     for (const skill of skills) {
-      installSkill(skill, available.get(skill), path.join(dir, skill), { mode, registry });
+      results.push(installSkill(skill, available.get(skill), path.join(dir, skill), { mode, registry }));
     }
   }
   if (!opts.check) saveRegistry(registry);
+  // 설치 결과는 접지 않고 모두 펼쳐서 보여준다.
+  report(results, { verbose: true });
 }
 
 // Find installed copies of known skills and refresh the ones whose hash differs from the source.
@@ -459,24 +523,24 @@ function update(opts, available) {
   const agents = opts.explicitAgents ? opts.agents : Object.keys(TARGETS);
   const missing = opts.skills.filter((s) => !available.has(s));
   if (missing.length) throw new Error(`없는 스킬: ${missing.join(", ")}`);
-  let found = 0;
+  const results = [];
   for (const { base, global } of scopes(opts)) {
     const registry = loadRegistry(base);
     for (const dir of targetDirs(base, global, agents)) {
       if (!fs.existsSync(dir)) continue;
       for (const name of fs.readdirSync(dir).sort()) {
         if (!available.has(name) || (opts.skills.length && !opts.skills.includes(name))) continue;
-        found++;
-        installSkill(name, available.get(name), path.join(dir, name), {
+        results.push(installSkill(name, available.get(name), path.join(dir, name), {
           mode: opts.force ? "force" : "update",
           check: opts.check,
           registry,
-        });
+        }));
       }
     }
     if (!opts.check) saveRegistry(registry);
   }
-  if (!found) console.log("업데이트할 설치된 스킬이 없습니다.");
+  if (!results.length) return console.log("업데이트할 설치된 스킬이 없습니다.");
+  report(results, { verbose: opts.verbose });
 }
 
 function git(cwd, args, opts = {}) {
@@ -536,7 +600,7 @@ function sync(opts, available) {
     const variants = new Set(edited.map((c) => c.cur));
     if (variants.size > 1) {
       console.log(`! ${name}: 사본들이 서로 다르게 수정됨, 건너뜀`);
-      for (const c of edited) console.log(`    ${c.dest} (${c.cur})`);
+      for (const c of edited) console.log(`    ${agentOf(c.dest)}  ${shortPath(c.dest)}  (${c.cur})`);
       continue;
     }
     const from = edited[0];
@@ -545,7 +609,11 @@ function sync(opts, available) {
       continue;
     }
     const repo = skill.private ? PRIVATE_REPO : PUBLIC_REPO;
-    console.log(`↑ ${name}${skill.private ? " 🔒" : ""}: ${from.dest} (${src} → ${from.cur})`);
+    console.log(`↑ ${name}${skill.private ? " 🔒" : ""}  ${src} → ${from.cur}`);
+    const others = list.filter((c) => c.cur !== from.cur);
+    const w = Math.max(...[from, ...others].map((c) => agentOf(c.dest).length));
+    console.log(`    출처  ${agentOf(from.dest).padEnd(w)}  ${shortPath(from.dest)}`);
+    others.forEach((c, i) => console.log(`    ${i ? "    " : "전파"}  ${agentOf(c.dest).padEnd(w)}  ${shortPath(c.dest)}`));
     if (!plans.has(repo)) plans.set(repo, []);
     plans.get(repo).push({ name, skill, from, list });
   }
@@ -573,7 +641,7 @@ function sync(opts, available) {
         if (c.cur !== hash) {
           copySkill(pushed, c.dest);
           copied = true;
-          console.log(`  → ${c.dest}`);
+          console.log(`  → ${agentOf(c.dest)}  ${shortPath(c.dest)}`);
         }
         const stamp = new Date().toISOString();
         putEntry(c.registry, name, c.dest, hash, pushed, c.entry?.installedAt || stamp, copied ? stamp : c.entry?.updatedAt);
