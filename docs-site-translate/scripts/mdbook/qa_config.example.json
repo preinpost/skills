@@ -1,0 +1,19 @@
+{
+  "round": "qa1",
+  "project": "<PROJECT>",
+  "site": "Kubebuilder Book (https://book.kubebuilder.io)",
+  "language": "한국어",
+  "title_suffix": " - Kubebuilder 한국어 문서",
+  "glossary": "<PROJECT>/glossary.json",
+  "sidebar_glossary": "<PROJECT>/sidebar_glossary.json",
+  "extra_rules": [
+    "title 필드는 사이드바 제목과 일치하도록 이미 맞춰 두었습니다. title은 바꾸지 마세요.",
+    "다른 문서를 가리키는 링크 텍스트가 대상 문서 제목이면 sidebar_glossary.json의 한국어 제목을 쓰세요(이미 대부분 맞춰 둠).",
+    "Apache License 본문과 Copyright 줄은 영어 원문 그대로 두는 것이 정상입니다.",
+    "<pre> 안의 접이식 요약 라벨(Apache License, Imports 등)은 번역 대상이 아닙니다.",
+    "원문 HTML 자체의 결함(<em>으로 깨진 '*', 잘못된 <parameter> 태그, 코드 오타 등)은 태그/코드를 고치지 말고 주변 문장만 자연스럽게.",
+    "용어집 우선: 코어 타입(Core Type), 3-way 병합, 오퍼랜드(Operand), 객체(object), 메인테이너, 지원 중단(deprecated), 하위 리소스(subresource), 아티팩트. 문서 안에서 이와 다른 표기를 보면 용어집 쪽으로 고치세요. 반대 방향(용어집과 다른 표기로) 바꾸는 것은 금지.",
+    "영어 병기(괄호)는 문서에서 처음 나올 때 한 번만. 반복되는 블록마다 병기가 반복되면 정리하세요."
+  ],
+  "forbidden_paths": ["~/.pi/agent/auth.json"]
+}

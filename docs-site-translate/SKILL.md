@@ -1,111 +1,119 @@
----
-name: docs-site-translate
-description: Translate an entire documentation/manual website (Sphinx, MkDocs, Docusaurus, etc.) into another language (default Korean) as a static mirror site, then quality-review it with parallel sub-agents. Use when the user asks to "translate the docs site", "make a Korean version of <manual>", "번역해서 정적 사이트로", "매뉴얼 번역", or to QA/re-review an existing machine translation of many documents.
----
-
 # Docs Site Translate (매뉴얼 사이트 번역 + 검수)
 
-Large-scale pipeline: crawl → extract → translate (agents) → validate → build static site → triage → agent QA → sample-based decision → full QA → publish.
-Reference implementation (Linux kernel docs, 2,091 pages) is in `scripts/`. Scripts are **site-specific**: read and adapt them (selectors, sidebar structure, title suffix, paths, term RULES) rather than running blindly.
+Pipeline for any static docs site (Sphinx, mdBook, MkDocs, Docusaurus, Hugo, …):
+crawl → extract → glossary → translate (agents) → validate → build → global post-fix → triage → QA (agents) → post-QA normalize → publish → remote check.
 
-## 0. Setup decisions (ask the user once)
-- Source URL, target language, output dir, scope (exclude rules: changelogs, generated API dumps, translations dirs).
-- Title suffix (e.g. `&#8212; Linux 커널 문서`), glossary seed terms, whether to keep English in parentheses on first use.
-- Sub-agent model/provider and max concurrency (default 5; 10 worked fine for QA). Publishing target (GitHub Pages / object storage / …) — never push without explicit confirmation.
-- Glossary must exist **before** translation and cover recurring domain terms (userspace, discrete GPU, aperture, lease …). Missing entries caused cross-doc drift that later needed bulk fixes.
+Reference implementations live in `scripts/<generator>/` (currently `scripts/mdbook/` from Kubebuilder Book, 92 pages). They are **site-specific**: read and adapt them (content selector, sidebar source, title suffix, link rules, term rules). If no folder matches the generator, write new scripts following the same contracts (§1) and save them back as `scripts/<generator>/` at the end.
+Earlier reference run: Linux kernel docs (Sphinx, 2,091 pages) — its lessons are kept below; its scripts are not bundled.
 
-## 1. Pipeline layout
+## 0. Setup decisions (ask the user once, recommend defaults)
+- Source URL/version, target language, output dir (client's working dir; never the proxy/scratch of the harness), scope (exclude old versions, changelogs, generated API dumps, translation dirs).
+- Title suffix (e.g. ` - <Product> 한국어 문서`), glossary seed terms, English-in-parentheses on first use (default yes).
+- Sub-agent model/provider + max concurrency (default 5). Store the target in `_work/agent_target.json` and read it on every spawn so the user can switch models mid-run.
+- Publishing target (GitHub Pages / object storage / …) — never publish without explicit confirmation.
+- Size decides QA strategy: ≲300 pages → full QA directly; larger → triage + sample first (§5).
+
+## 1. Identify the generator & contracts
+First inspect one raw page + the site's assets:
+- **Content root**: Sphinx `div[role=main]`/`.body`; mdBook `<main>`; MkDocs `article`/`.md-content`; Docusaurus `article`/`.markdown`; Hugo theme-dependent.
+- **Sidebar source**: per-page HTML (Sphinx, MkDocs) vs shared file (mdBook `toc-*.js` + `toc.html`, Docusaurus JS bundle). Shared sidebars are translated once via `sidebar_glossary.json` (EN title → KO), not per doc.
+- **Page list**: toctree / sidebar / `SUMMARY` / sitemap.xml.
+- **Assets**: CSS/JS/fonts/images incl. `url()` inside CSS, search index, `toc.html`, 404 page. Note root-absolute paths (`/logos/x.svg`) and extensionless links (`href="faq"`).
+
+Project layout (names are conventions; keep the contracts):
 ```
 <project>/
-  crawl_index.py   # discover pages from toctree/sidebar → manifest.json, toc_order.json
-  scrape_raw.py    # fetch raw_html/ (polite, cached)
-  extract.py       # raw_html → extracted/<doc>.json  {title, body chunks, sidebar_html, meta keys}
-  glossary.json    # term → translation (+ sidebar_glossary.json for nav terms)
-  translated/<doc>.json   # same schema as extracted, text translated
-  validate_only.py # structural diff extracted vs translated (tags/attrs, <pre>, <code>, entities, keys, CJK leakage, title suffix)
-  build_site.py    # translated → out/ (copy static_assets, rewrite links)
-  verify.py        # check out/ html + links
-  harness_batch.py # batch drive + `rebuild` = build+verify+validate all
-  triage.py        # per-doc risk signals → score
-  term_normalize.py   # bulk glossary term fix on text nodes only (dry-run / --apply)
-  sidebar_sync.py     # align sidebar TOC link text to body headings (dry-run / --apply)
-  static_assets/_static/kr-override.css  # font + "원문" badge styles (reference: scripts/kr-override.css)
-  _work/           # queues, results, hints, logs; next_queue.py + qa_reconcile.py live here
+  crawl_index.py    # page list → manifest.json [{docname,url,depth}], toc_order.json
+  scrape_raw.py     # raw_html/<doc>.html (cached, polite delay, retries)
+  fetch_assets.py   # static_assets/ (follow css url(); skip page links; extensionless page links are NOT assets)
+  extract.py        # raw → extracted/<doc>.json; split content root at top-level element boundaries (~6KB); assert "".join(chunks)==body
+  glossary.json     # {_rules:[...], terms:{en:ko}}  + sidebar_glossary.json
+  validate_only.py  # structural diff extracted vs translated (see §3)
+  build_site.py     # raw shell + translated body → out/ (see §6)
+  verify.py         # every href/src in out/ resolves; + 0 body links to the original domain
+  harness_batch.py  # `rebuild` = build + verify + validate translated docs
+  triage.py         # per-doc risk signals
+  link_title_sync.py# internal-link text that equals target's EN title → target's KO title (dry-run/--apply)
+  term_normalize.py # bulk term fix on text nodes only (dry-run/--apply)
+  _work/            # queues, results, inflight, hints, notes, agent_target.json, task templates
 ```
-Key schema rule: chunked JSON whose keys/metadata (`docname, depth, static_prefix, body_bytes, chunk_count, chunk_id, wrapper_open, wrapper_close`) must be byte-identical to extracted; only text nodes change.
+Schema rule: translated JSON keeps every key/metadata byte-identical to extracted (`docname, depth, static_prefix, body_bytes, chunk_count, chunk_id`, …); only text nodes (and `title`) change. Saved with `json.dump(..., ensure_ascii=False, indent=2)` + `"\n"`.
 
-## 2. Translation phase
-- One doc (or one chunk set) per sub-agent; refill a slot as soon as one finishes.
-- Agent task must include: file paths, glossary, "translate yourself" rule, structure rules, and "run validate_only.py <doc> until 0 errors".
-- **Forbid explicitly**: external translation services (Google Translate), external LLM APIs (OpenRouter etc.), reading credential files (`~/.pi/agent/auth.json`), reusing other batches' caches. Agents have been caught doing this — if discovered, re-translate that batch.
-- Preserve: HTML tags/attrs, `<pre>` verbatim, `<code>`/identifiers/paths/config values, entities `&lt; &gt; &amp;`, no hanzi/kana leakage for Korean.
-- Put the known MT failure patterns into the translate prompt up front (they dominated QA fixes). Examples below are from the reference run (Linux kernel → Korean); patterns 1–3 are generic for any tag-chunked docs site, adapt wording to the target language:
-  - "다음 …합니다: X" — identifier/link pushed after a colon at sentence end (Sphinx splits sentences at `<code>`/`<a>`; MT translates fragments).
-  - `을(를)/은(는)` placeholders; sentences cut/duplicated at tag boundaries; lines broken at the English line wraps.
-  - Proper nouns/units/option values translated as words (Clang→"땡땡이", `us`→"우리", arm→"팔", `clean`→"깨끗한", `M=$PWD`→`남=$PWD`).
-  - Generator artifacts in the source itself (e.g. broken kernel-doc xrefs `<code>struct is</code>`): keep the code, fix only the surrounding sentence. List such site-specific artifacts in `qa_config.json` → `extra_rules`.
-- JSON format must be stable: `ensure_ascii=False, indent=2`, same trailing-newline as before. Tell agents explicitly (they rewrote with indent=1 etc.).
+Python pitfall seen: `open(p,"w").write(f(open(p).read()))` truncates the file before reading → read into a variable first.
 
-## 3. Global post-fixes (scripted, after all translated)
-- CJK/kana scan → 0. Title normalization. Sidebar normalization against sidebar_glossary (skip docs whose structure mismatches).
-- Grep known bad words/false friends and fix context-aware (e.g. sleep→"슬립" not "수면", "origin"→"출처" not "원산지"). Review before bulk replace; revert overreach.
-- `harness_batch.py rebuild` → build/verify/validate all 0 errors.
+## 2. Glossary (before translation, then keep growing)
+- Seed from a frequency scan of prose (strip `<pre>/<code>/<svg>`), unigram+bigram ≥15. Include rules: product/tool names untranslated, resource kinds/identifiers in English, commands/flags/paths/markers never translated.
+- Distinguish near-synonyms explicitly (e.g. desired/actual/**observed** state; reconcile=조정 vs tweak/adjust ≠ 조정).
+- **During translation**, every agent report lists terms it had to choose. Add them to glossary.json right away (later agents read it at start). Do the same for QA. This prevented most cross-doc drift; the remainder is fixed in §7.
+- Before fixing a term globally, grep which form the corpus already uses.
 
-## 4. QA phase
-### Triage signals (triage.py)
-`code_mut` (code text changed), `ent_loss`, `eng_left` (untranslated paragraph), `glue_eng` (English words glued into sentence), `len_short`/`len_long` (omission/hallucination by length ratio), `badword`, `misaligned`. badword/glue_eng are naive — tell agents NOT to distort correct translations to clear them.
+## 3. Validation (`validate_only.py`)
+Checks per chunk: tag/attr sequence identical; `<pre>/<code>/<svg>/<script>` verbatim **and in the same order**; counts of `&lt; &gt; &amp;`; no hanzi/kana (for Korean; adapt per language); meta keys; title suffix; JSON formatting.
+Consequence to tell agents up front: tag/code order is fixed, so reorder the *surrounding words* to fit target-language order instead of moving tags.
 
-### Lessons (important)
-- Triage score does **not** predict meaning errors. Low/zero-score docs still had inverted meaning ("A 대신 B" swapped, passive/active subject swapped, `analogous to`→"되돌린다", `moved forward` direction flipped, swapped adjacent `<code>` spans).
-- So: QA high-score docs first, then run a **random sample (~40, fixed seed)** of the low-score pool. If C-rate ≳5% or B with meaning errors is common → full review of the rest, prioritized by how likely readers follow instructions (admin/user guides, process, userspace API, core API, driver API … hardware-specific last).
+## 4. Translation phase
+- One doc per agent; biggest docs first; refill slots as they finish. Pop + delegate in one atomic step and append to `_work/tr_inflight.txt`.
+- Tiny or pathological docs (e.g. a page that is one huge SVG + one sentence) → translate yourself.
+- Task template (`scripts/*/tr_task_template.md`) must contain: paths, glossary-first rule, JSON rules, what not to translate (code, identifiers, URLs, license headers, product/Kind names, collapsible code labels inside `<pre>`), style, **known MT failure patterns**, forbidden actions, validate-until-0, report format (coverage 전체/일부, validate result, source oddities, terms chosen).
+- Known MT failure patterns (generic for tag-chunked HTML):
+  - identifier/link pushed after a colon at sentence end ("다음을 실행합니다: X");
+  - `을(를)/은(는)` placeholders; sentences cut/duplicated at tag boundaries; line breaks copied from source wraps;
+  - proper nouns/units/option values/**literal string values** translated as words (`clean`→깨끗한, `"alpha"`→알파, `kind` cluster→종류);
+  - meaning inversions: "A instead of B", active/passive subject swap, negation, from/to, before/after, `only`, "can"→단정;
+  - sentences split across `<summary>`/`<p>`, `<dt>`/`<dd>`, table cells → each fragment must still read naturally (don't leave a 1-word summary like "주어진");
+  - source-site artifacts (`*` rendered as `<em>`, stray tags, typos in code): keep tags/code, fix only surrounding prose; list them in QA `extra_rules`.
+- Forbid explicitly: external translation services, external LLM APIs, reading credential files, editing other docs/glossary/scripts/manifest.
+- Spot-check the first 2–3 docs of any **new model** sentence-by-sentence before trusting it.
 
-- Triage-0 docs can be catastrophically bad (whole-doc MT garbage). Reference run: 1,403 reviewed → A 57% / B 40% / C 3%, several C's had triage score 0 — i.e. full review was worth it.
+## 5. Global post-fix + triage
+- Rebuild; CJK/kana/cyrillic scan = 0; placeholder particles = 0; grep known false friends (context-aware, review before bulk replace).
+- **Title sync**: set each doc's `title` = sidebar KO title + suffix (sites normally use the same string). Then `link_title_sync.py` for internal links whose source text equals the target's EN title. Variants (paraphrased titles) need a grep pass after QA.
+- Triage signals: `code_mut`, `ent_loss`, `eng_left`, `glue_eng`, `len_short/len_long`, `badword`. Exclude license text, identifier-only blocks, metric/flag names, tables of names. Korean is ~0.4× English length, so use a low short-ratio threshold.
+- Triage does **not** predict meaning errors (reference runs: zero-score docs had inverted meaning; Linux run had C docs with score 0). Large sites: QA high-score first, then a fixed-seed random sample (~40) of the rest; if C ≳5% or meaning-B common → full QA. Small sites: full QA straight away, ordered by how likely readers follow instructions (getting started → tutorials → migration/guides → reference → plugin/hardware-specific).
 
-### Coverage rule (big docs)
-- Agents silently review only part of long docs (first N chars per chunk, 1/6 sample, "risky paragraphs only") and still report A/B. Require **"대조한 범위(전체/일부)"** in every report; if partial → record grade but add to a re-review list and later delegate a *full-coverage* task ("모든 chunk의 모든 문단, chunk별로 나눠 읽고 chunk마다 저장"). In the reference run every partially reviewed doc had hidden problems (one had ~150 MT-pattern fixes and a stray Russian word).
-- For docs > ~200 paragraphs, assign full coverage from the start.
+## 6. Build rules (`build_site.py`) — link handling is where most bugs were
+- Copy `static_assets/` → `out/`; translate shared sidebar files; set `<html lang>`; inject override CSS with `?v=<sha1[:8]>`; write `.nojekyll` and README.
+- Rewrite every `href`/`src`:
+  1. Decide "internal doc" by **manifest membership**, not by `os.path.exists(out/…)` (pages are written in order; later pages don't exist yet → links leaked to the original site, ~370 in one run). Strip `.html`, map `""`/`index` → landing doc, add `.html` to extensionless doc links.
+  2. Absolute links to the original site (`https://<orig>/<doc>.html`) → relative internal.
+  3. Root-absolute (`/logos/x.svg`) and double-slash (`..//logos`) asset paths → relative (works under any bucket prefix; breaks only when hosted under a sub-path, so it's invisible locally).
+  4. Repo-relative source links (`../../../pkg/x.go`, `testdata/…`) → `https://github.com/<org>/<repo>/tree/<branch>/<path>`; generated `.html` of repo markdown (`designs/*.html`) → `.md`.
+  5. Links broken on the source site itself → `LINK_FIX` map to the intended doc (verify with curl that the original 404s; tell the user these are guesses).
+  6. Remaining non-existent targets → original site URL (+ "원문" badge for untranslated docs).
+- Insert the "translated / 원문" notice **after** link rewriting (placeholder), otherwise its 원문 link gets rewritten to point at itself.
+- `verify.py`: 0 broken internal links (except known stock pages like a theme 404), and **0 body links to the original domain** except the notice and print/edit buttons.
+- Search index stays in the source language unless rebuilt; mention it.
 
-### Glossary authority
-- Agents "fix" toward the doc-local majority even when it contradicts glossary (reference run: 유저 공간→사용자 공간). Prompt: *glossary wins; never change toward non-glossary terms.* Orchestrator: scan each report for term changes and revert violations immediately.
-- Collect inconsistent terms during QA in a list; after QA run `scripts/term_normalize.py` (text nodes only, skips `<pre>/<code>/<cite>`/attributes/sidebar, dry-run first, backup to /tmp, guards like `(?<!\()aperture` so `애퍼처(aperture)` doesn't become `애퍼처(애퍼처)`), then add the terms to glossary.json. Before choosing the target term, grep which form the body already uses (reference run: lease → "리스" was already used ~15×, so the proposed "임대" would have been wrong).
+## 7. QA phase
+- Config in `_work/qa_config.json` (round, site, language, glossary paths, extra_rules); generic `next_queue.py` pops queue, records `<doc> <grade> <summary>`, prints `{doc, task, remaining}` with per-doc hints (from translation-phase notes in `_work/qa_notes.txt` + triage examples).
+- Keep `_work/qa_notes.txt` during translation: every suspicious item an agent reports (awkward pun, split sentence, term drift, title mismatch) → one line `doc: note`. These become QA hints; GLOBAL/TERM lines become post-QA scripts.
+- Review task: compare every block sentence-by-sentence; report coverage 전체/일부, self-grade, changes (meaning fixes as 원문/전/후), validate result. Glossary wins; never change toward non-glossary terms; don't touch title/meta/other docs.
+- **Coverage**: partial review → keep grade but re-queue a full-coverage task. Docs > ~200 blocks: demand chunk-by-chunk reading and saving from the start; check the reported block counts.
+- **Regrade** every report (agents err both ways): A = polish/terms only; B = any meaning fix, restored omission, inverted relation/subject, added content removed, lost identifier; C = multiple wrong core instructions, scrambled or large omissions (record C even if "fixed").
+- **Agents introduce errors too** — spot-check reported diffs, especially: literal values translated, content added "for clarity", default/condition semantics changed, link text pointing to wrong titles. Revert immediately.
+- **Don't bulk-edit a doc while it is in review** — the agent's save overwrites it. Either wait, or note `RECHECK:` and re-apply after it completes.
+- Report to the user in batches (table: doc / grade / one-line fix; details only for meaning inversions and C).
 
-### Sidebar
-- Agents are told not to touch `sidebar_html` terms, so body heading fixes leave the sidebar stale. After QA: `scripts/sidebar_sync.py` (aligns sidebar `href="#id"` link text to the body heading of that section; dry-run then `--apply`) + term_normalize on sidebar strings, then rebuild.
+### Concurrency, rate limits, resume
+- Slot count lives in `_work/<round>_slots.txt`; refill only while inflight < slots. Workspace-wide limits are shared with other jobs and drop at peak hours.
+- On 429/quota failure: validate the doc (partial edits must still pass), put it back at the **front** of the queue, don't refill; if failures repeat, cut slots and ask the user (wait / smaller slots / other model / mix).
+- All state in files: queue, results, inflight. On resume reconcile: done vs queued vs inflight-but-lost; never record a doc twice; late completions from a previous model still count.
 
-### Review agent task template
-See `scripts/next_queue.py` — generic; per-project values (round name, site name, target language, title suffix, glossary path, forbidden cache paths, extra site-specific rules) go in `_work/qa_config.json`, not in the script (pops `_work/qaN_queue.txt`, appends grade to `_work/qaN_results.txt`, prints `{doc, task, remaining}` with per-doc triage hint). Task includes: compare sentence-by-sentence with original, fix in place, keep structure, glossary consistency, forbidden actions, validate to 0 errors, don't touch manifest/other docs, report grade A/B/C + short summary.
+## 8. Post-QA normalization
+- Grep leftover non-glossary forms (collected TERM lines) and fix with `term_normalize.py` (text nodes only, guards against `X(x)`→`X(X)`, dry-run, backup).
+- Re-run `link_title_sync.py`; grep paraphrased link titles; unify UI strings that recur across docs (e.g. "show detailed argument help").
+- Decide leftover open term choices explicitly and add them to glossary.
+- Rebuild; validate all = 0; scans = 0; screenshots of a few pages (headless Chrome with `--virtual-time-budget=5000` so JS sidebars render).
 
-### Grading rule (orchestrator re-grades agent self-reports)
-- A: only trivial wording/particles/terminology polish.
-- B: any meaning fix, restored omission, inverted clause, lost identifier/entity — even if agent said A.
-- C: multiple inverted/wrong core instructions, scrambled sentences, large omissions. If agent says "C→A after fixes" record C.
+## 9. Publish
+- Rebuild immediately before publishing; README (source license + attribution + "machine translated, reviewed" + search-index note) generated by the build.
+- Static hosting works anywhere because links are relative. Object storage via rclone: list the bucket first, upload under a **new prefix with `copy` (never `sync`)**; if the endpoint forbids HEAD (403 on metadata), use `--no-check-dest`. Compare local vs remote file counts.
+- **Check the remote URL** with curl (status + content-type) and a headless screenshot — sub-path hosting exposed root-absolute asset paths that looked fine locally. Remind the user about browser cache (hard reload).
+- GitHub push / Pages only after the user gives the repo and confirms.
 
-### Orchestration loop
-```
-on completion(doc, agentReport):
-  grade = regrade(agentReport)
-  r = python3 _work/next_queue.py <doc> <grade>   # records + pops next
-  if r.doc: delegate_task(task=r.task, title="검수: "+r.doc, role="review")
-  report to user: short per-doc summary (detail only for C / meaning inversions) + counts
-```
-Periodically: `awk '{print $2}' _work/qaN_results.txt | sort | uniq -c` and `harness_batch.py rebuild`.
-- Batch several completions into one tool call when many arrive together; report to the user per batch (table: doc / grade / one-line fix), not per doc.
-- Popping a doc and delegating it must be one atomic step (pop → delegate in the same script). A provider quota stop between them left 4 docs popped but never run.
-
-### Resume / handoff (model switch, quota, context reset)
-- All state lives in files: `_work/qaN_queue.txt`, `qaN_results.txt`, `qaN_hints.json`. On resume run `scripts/qa_reconcile.py qaN` (copy into `_work/`): shows done/queued/**inflight_or_lost**/dups/grades. Lost in-flight docs = popped but no result; wait for late completions first, re-delegate if none arrive, and never record a doc twice.
-- Completion notifications from the previous model's children may still arrive after the switch — record them normally.
-
-## 5. Publish
-- **Rebuild `out/` right before publishing** (`build_site.py`); out/ goes stale after QA edits.
-- `out/.nojekyll`, README with license of source (e.g. GPL-2.0) and attribution + "machine translated, under review" notice if QA incomplete.
-- Local preview: `cd out && python3 -m http.server 8000`. Visual check with headless Chrome: `"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --window-size=1400,2200 --screenshot=/tmp/s.png file://$PWD/out/index.html`.
-- GitHub push / Pages enable only after user gives repo and confirms.
-- All internal links are relative `.html`, so any static host/prefix works (S3, R2, Pages, …). Untranslated targets link to the original site with an "원문" badge.
-- `build_site.py` appends `?v=<sha1[:8]>` of each CSS to its `<link>` so CDN/browser caches pick up CSS changes after a rebuild — keep it.
-
-### Known UI pitfall (Sphinx/Alabaster theme)
-- Badge chips inside sidebar `li` inherit `text-indent:-1em` from the theme → text spills out of the chip. `.kr-orig-badge { text-indent:0; white-space:nowrap }` (already in kr-override.css of the reference).
+### Known UI pitfalls
+- Sphinx/Alabaster: badge chips in sidebar `li` inherit `text-indent:-1em` → `.kr-orig-badge{text-indent:0;white-space:nowrap}`.
+- Korean text: `word-break: keep-all` for prose, `normal` for code.
 
 ## Reporting style
-User-facing reports in the user's language, concise: what was fixed (grouped), grade, validate result, progress counts (완료/진행 중/대기, A/B/C).
+User's language, concise: what was done/fixed (grouped), grades, validate result, counts (완료/진행 중/대기, A/B/C), anything needing a decision. Batch multiple completions into one report.

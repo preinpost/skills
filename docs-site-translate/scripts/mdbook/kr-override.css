@@ -1,0 +1,9 @@
+/* 한국어 번역본 오버라이드 */
+html[lang="ko"] body, html[lang="ko"] .sidebar, html[lang="ko"] .content {
+  font-family: "Open Sans", "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", sans-serif;
+  word-break: keep-all; overflow-wrap: anywhere;
+}
+html[lang="ko"] .content main { line-height: 1.75; }
+html[lang="ko"] code, html[lang="ko"] pre { word-break: normal; }
+.kr-notice { font-size: .85em; padding: .5em .8em; margin: 0 0 1.2em; border-left: 3px solid #7a9cc6; background: rgba(122,156,198,.12); }
+.kr-orig-badge { display:inline-block; font-size:.7em; padding:0 .4em; margin-left:.3em; border:1px solid currentColor; border-radius:3px; opacity:.7; text-indent:0; white-space:nowrap; }
