@@ -1,0 +1,34 @@
+{
+  "notes": "리눅스 커널 문서 한국어 번역 용어 통일 가이드",
+  "keep_original_or_paren": {
+    "device": "디바이스(device) 또는 장치",
+    "driver": "드라이버",
+    "bus": "버스",
+    "probe": "probe (또는 프로브)",
+    "remove": "remove (또는 제거 콜백)",
+    "bind / unbind": "바인딩(bind) / 언바인딩(unbind)",
+    "sysfs": "sysfs",
+    "kobject": "kobject",
+    "reference count": "참조 카운트(reference count)",
+    "page / folio": "페이지(page) / 폴리오(folio)",
+    "PFN (Page Frame Number)": "PFN(페이지 프레임 번호)",
+    "DMA": "DMA",
+    "IOMMU": "IOMMU",
+    "VFIO": "VFIO",
+    "mediated device (mdev)": "mediated device (mdev)",
+    "RCU": "RCU",
+    "spinlock / mutex": "스핀락(spinlock) / 뮤텍스(mutex)",
+    "userspace / kernel space": "유저 공간(userspace) / 커널 공간(kernel space)",
+    "upstream": "업스트림(upstream)",
+    "maintainer": "메인테이너(maintainer)",
+    "subsystem": "서브시스템(subsystem)",
+    "patch": "패치(patch)"
+  },
+  "never_translate": [
+    "C struct/function/macro/enum/variable identifiers",
+    "File paths (/sys/..., /dev/..., Documentation/..., include/linux/...)",
+    "Kconfig symbols (CONFIG_*)",
+    "Shell commands and CLI flags",
+    "errno codes (-EINVAL, -EPROBE_DEFER, -ENOMEM, etc.)"
+  ]
+}
