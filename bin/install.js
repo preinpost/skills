@@ -317,8 +317,8 @@ function report(results, { verbose = false } = {}) {
   for (const [name, list] of byName) {
     const worst = list.reduce((a, b) => (STATES[b.state].rank > STATES[a.state].rank ? b : a));
     const lock = list[0].skill.private ? " 🔒" : "";
-    const count = `${list.length}곳`;
-    const head = `${STATES[worst.state].mark} ${name.padEnd(width)}  ${list[0].src}  (${count})${lock}`;
+    const where = list.map((r) => agentOf(r.dest)).join(", ");
+    const head = `${STATES[worst.state].mark} ${name.padEnd(width)}  ${list[0].src}  (${where})${lock}`;
     console.log(head);
     const uniform = list.every((r) => r.state === worst.state);
     if (uniform && worst.state === "latest" && !verbose) continue;
