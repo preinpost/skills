@@ -1,6 +1,6 @@
 ---
 name: pseudocodify
-description: Convert a skill (SKILL.md) or any procedural document (README, runbook, guide) into structured pseudocode showing flow, branches, loops, approval points, and invariants at a glance, optionally with "why" comments. Read-only by default. Use when the user asks e.g. "pseudocodify this", "convert this skill to pseudocode", "이 스킬 수도 코드로 바꿔줘", "이유는 주석으로 달아줘".
+description: Convert a skill (SKILL.md) or any procedural document (README, runbook, guide) into structured pseudocode showing flow, branches, loops, approval points, and invariants at a glance, with "why" comments. Single fixed output format, no modes. Read-only by default. Use when the user asks e.g. "pseudocodify this", "convert this skill to pseudocode", "이 스킬 수도 코드로 바꿔줘", "이유는 주석으로 달아줘".
 ---
 
 # pseudocodify
@@ -47,24 +47,18 @@ Turn a procedural document into pseudocode so its flow, branches, retries, appro
 - For patterns not in the table, coin a short uppercase keyword; use it consistently within one output.
 - Indentation expresses scope. Keep lines under ~80 chars.
 - Copy paths, command options, and numeric values (settings, thresholds) verbatim.
-- Wrap the whole output in one ```` ```text ```` block.
-
-## Modes
-
-Pick per the request; default is plain.
-
-1. **Plain**: pseudocode only.
-2. **Why comments** ("with reasons", "why"): annotate lines with rationale.
-   - Reason stated in source → `# why:`
-   - Reason inferred → `# why(inferred):`. If unsure, leave it out.
-   - After the output, list inferred items briefly and ask the user to confirm intent.
-3. **Hybrid** ("keep it runnable"): flow as pseudocode; keep code blocks meant to be run verbatim and dense tables as in the source. Reference them from pseudocode as `RUN <block name>`.
+- Wrap the pseudocode in one ```` ```text ```` block.
+- Annotate with rationale comments:
+  - Reason stated in source → `# why:`
+  - Reason inferred → `# why(inferred):`. If unsure, leave it out.
+- Embed commands, tables, and code as pseudocode lines; do not keep them as separate verbatim blocks.
 
 ## After the output
 
-Add 2–3 lines only:
+Add 2–4 short lines only, no other prose:
 
-- What the conversion gained (e.g. hidden retry loops, approval branches surfaced) and lost (e.g. runnable code, context).
+- Inferred reasons used (list briefly) and ask the user to confirm intent.
+- What the conversion gained (e.g. hidden retry loops, approval branches surfaced) and lost (e.g. context).
 - Ambiguities or missing branches exposed in the source (e.g. no path for refusal). Point them out; do not fix.
 
 ## Don'ts
