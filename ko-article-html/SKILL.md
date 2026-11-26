@@ -19,13 +19,18 @@ PROCEDURE ko_article_html(URL):
         # 상단 "비공식 번역본" 안내 필수
 
     # ── 0. 준비 ─────────────────────────────────────────
-    SKILL ← ~/.pi/agent/skills/ko-article-html
-    mkdir -p work; cd work
+    SKILL ← directory containing this SKILL.md
+    TMP   ← python3 -c "import tempfile; print(tempfile.gettempdir())"
+        # macOS/Linux: $TMPDIR 또는 /tmp, Windows: %TEMP%
+    WORK  ← TMP/ko-article-html-<slug>
+    mkdir -p WORK; cd WORK
+        # 모든 중간 파일과 산출물은 WORK에만 만든다. 프로젝트 폴더에 work/를 만들지 않는다
     source.html ← curl -sL -A "Mozilla/5.0" "$URL"
         # why(inferred): 브라우저가 아닌 UA를 막는 사이트가 있다
     # 원문은 source.html, 조립 중인 템플릿은 page.html
         # why: 템플릿 복사가 원문을 덮어쓰면 6단계 og:image를 찾을 수 없다
-    # 스크립트는 항상 $SKILL/scripts/... 로 호출, 산출물은 작업 폴더에
+    # 스크립트는 항상 $SKILL/scripts/... 로 호출
+    # Windows에서는 python3 대신 py / python, 경로는 따옴표로 감싼다
 
     # ── 1. 원문과 그림 확보 ──────────────────────────────
     text ← fetch_content(URL, readable)
@@ -114,7 +119,8 @@ PROCEDURE ko_article_html(URL):
             # why: base64를 Blob URL로 바꾸는 처리가 들어 있다
 
     # ── 6. 전달 & S3 공유 ────────────────────────────────
-    REPORT path, size, figure_count, replaced, "비공식 번역"
+    REPORT WORK/<slug>-ko.html (절대 경로), size, figure_count, replaced, "비공식 번역"
+        # 임시 경로는 재부팅 등으로 지워질 수 있으니 보관하려면 옮기라고 알린다
         # 본문을 채팅에 다시 붙이지 않음
     reachable ← rclone lsf article-translate:public/article-translate/ (silent)
     IF NOT reachable:
