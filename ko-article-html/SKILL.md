@@ -1,7 +1,7 @@
 ---
 name: ko-article-html
 description: Turn a web article into a complete Korean translation packaged as one self-contained HTML file for team sharing, keeping the original figures and animated demos inline. Use when the user asks to translate a URL or blog post fully into Korean and hand it over as HTML, e.g. "이 글 전체 번역해서 팀에 공유할 HTML로 만들어줘", "아티클 번역 HTML", "원문 그대로 그림까지 넣어서 한국어 문서로", "번역본 만들어서 파일로 줘".
-compatibility: Python 3.9+, curl, ffmpeg/ffprobe for animated figures, gh (optional, for secret gist sharing).
+compatibility: Python 3.9+, curl, ffmpeg/ffprobe for animated figures, rclone with article-translate remote (optional, for S3 sharing).
 ---
 
 # 원문 아티클 → 한국어 단일 HTML
@@ -104,22 +104,25 @@ python3 "$SKILL/scripts/check.py" article-ko.html
 - `file://`로 직접 열어도 동작하는지 확인한다. 모든 자산이 내장되어 있으므로 서버가 필요 없다.
 - 영상이 있으면 시킹이 되는지 확인한다. base64를 Blob URL로 바꾸는 처리가 들어 있으니, 재생바를 끌어 위치를 옮겨 본다.
 
-### 6. 전달 및 Secret Gist 공유
+### 6. 전달 및 S3 공유
 
 1. 파일 경로, 크기, 포함한 그림 수를 한두 줄로 알린다. 본문 내용을 채팅에 다시 붙이지 않는다. "비공식 번역"임을 한 번 더 밝힌다.
-2. 전달 전에 `gh auth status >/dev/null 2>&1`로 `gh` 설치 및 인증 여부를 조용히 확인한다.
-   - `gh`가 없거나 인증되어 있지 않으면 Gist 공유 여부를 **묻지 않고** 그대로 마무리한다.
-   - 인증되어 있는 경우에만 전달 마지막에 **사용자의 GitHub Secret Gist에 올릴지 물어본다.** 승인 전에는 절대 자동으로 업로드하지 않는다.
-3. 사용자가 승인하면 `--public` 없이 기본값(secret)으로 생성하고, `raw.githack.com` 규칙(`gist.githubusercontent.com` → `gist.githack.com`)으로 바로 렌더링되는 링크를 함께 뽑는다.
+2. 전달 전에 `rclone lsf article-translate:public/article-translate/ >/dev/null 2>&1`로 rclone 리모트 접근 가능 여부를 조용히 확인한다.
+   - 접근이 안 되면(리모트 미설정 포함) 업로드 여부를 **묻지 않고**, 전달 마지막에 안내 한 줄만 덧붙이고 마무리한다.
+     > 💡 rclone에 `article-translate` 리모트를 설정해 두면 번역본을 S3(`public/article-translate/`)에 올려 바로 공유할 수 있어요.
+   - 접근 가능하면 전달 마지막에 **S3(`article-translate:public/article-translate/`)에 올릴지 바로 물어본다.** 승인 전에는 절대 자동으로 업로드하지 않는다.
+3. 사용자가 승인하면 `Content-Type: text/html`로 업로드하고 공개 URL을 출력한다. 같은 이름이 이미 있으면 덮어쓰기 전에 사용자에게 확인한다.
 
 ```bash
-GIST_URL=$(gh gist create <slug>-ko.html -d "<번역 제목> (비공식 한국어 번역)")
-GIST_ID="${GIST_URL##*/}"
-RAW_URL=$(gh api "gists/$GIST_ID" --jq '.files[].raw_url')
-GITHACK_URL="${RAW_URL/gist.githubusercontent.com/gist.githack.com}"
+FILE=<slug>-ko.html
+DEST="article-translate:public/article-translate/$FILE"
+rclone lsf "$DEST" 2>/dev/null | grep -q . && echo "EXISTS"   # 있으면 덮어쓸지 먼저 확인
+rclone copyto "$FILE" "$DEST" --header-upload "Content-Type: text/html; charset=utf-8"
+URL="https://s3.preinpost.in/public/article-translate/$FILE"
+curl -sI "$URL" | grep -iE '^HTTP|content-type'   # 200 + text/html 확인
 ```
 
-   - 생성된 **Secret Gist URL**(`$GIST_URL`)과 바로 렌더링된 HTML을 볼 수 있는 **raw.githack.com 링크**(`$GITHACK_URL`)를 함께 출력한다.
+   - 확인된 공개 URL(`$URL`)을 출력한다. 버킷이 공개이므로 링크를 아는 누구나 볼 수 있음을 함께 알린다.
 
 ## 하지 말 것
 
@@ -128,7 +131,7 @@ GITHACK_URL="${RAW_URL/gist.githubusercontent.com/gist.githack.com}"
 - 영상 여러 개를 무제한으로 넣지 않는다. 12MB를 넘으면 메일·메신저에서 열리지 않는다.
 - 각주 번호를 손으로 세지 않는다. `check.py`가 내부 링크를 검사하므로 어긋나면 바로 드러난다.
 - 원문에 없는 해설이나 평가를 본문에 섞지 않는다. 해설이 필요하면 상단 안내나 푸터에 분리해 적는다.
-- 사용자 승인 없이 `gh gist create`를 실행하거나 `--public` 플래그로 공개 Gist를 만들지 않는다.
+- 사용자 승인 없이 S3에 업로드하거나, 확인 없이 기존 파일을 덮어쓰지 않는다.
 
 ## 참고 파일
 
