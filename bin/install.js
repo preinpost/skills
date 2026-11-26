@@ -789,6 +789,45 @@ async function add(opts, available, { privateChecked }) {
       console.log(`  등록  ${agentOf(x.dest)}  ${shortPath(x.dest)}`);
     }
   }
+
+  // 사본이 있는 범위(base)에서 아직 이 스킬이 없는 다른 하네스 위치에도 설치할지 묻는다.
+  const spots = new Map(); // targetDir -> { base, registry, names: [] }
+  for (const c of picked) {
+    for (const x of c.list) {
+      if (!x.registry) continue;
+      const base = path.dirname(x.registry.file);
+      const global = base === os.homedir();
+      for (const dir of targetDirs(base, global, Object.keys(TARGETS))) {
+        if (fs.existsSync(path.join(dir, c.name))) continue;
+        if (!spots.has(dir)) spots.set(dir, { registry: x.registry, names: [] });
+        if (!spots.get(dir).names.includes(c.name)) spots.get(dir).names.push(c.name);
+      }
+    }
+  }
+  if (spots.size) {
+    const dirs = [...spots.keys()];
+    let chosen = [];
+    if (process.stdin.isTTY && process.stdout.isTTY && !opts.yes) {
+      console.log();
+      const idx = await select(
+        "다른 하네스에도 설치",
+        dirs.map((d) => ({ label: `${agentOf(path.join(d, "x"))}  ${shortPath(d)}`, hint: spots.get(d).names.join(", ") })),
+        { multi: true, checked: dirs.map((_, i) => i), allowEmpty: true },
+      );
+      chosen = idx.map((i) => dirs[i]);
+    } else {
+      console.log(`→ 다른 하네스에도 설치: npx github:preinpost/skills ${picked.map((c) => c.name).join(" ")} -g -a all`);
+    }
+    const results = [];
+    for (const d of chosen) {
+      fs.mkdirSync(d, { recursive: true });
+      for (const name of spots.get(d).names) {
+        const pushed = { dir: path.join(dir, name), private: toPrivate };
+        results.push(installSkill(name, pushed, path.join(d, name), { mode: "update", registry: spots.get(d).registry }));
+      }
+    }
+    if (results.length) report(results, { verbose: true });
+  }
   for (const registry of registries.values()) saveRegistry(registry);
 }
 
