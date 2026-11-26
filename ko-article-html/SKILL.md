@@ -20,30 +20,31 @@ compatibility: Python 3.9+, curl, ffmpeg/ffprobe for animated figures, rclone wi
 ```bash
 SKILL=~/.pi/agent/skills/ko-article-html
 mkdir -p work && cd work
-curl -sL -A "Mozilla/5.0" "$URL" -o page.html
+curl -sL -A "Mozilla/5.0" "$URL" -o source.html
 ```
 
-스크립트는 항상 `$SKILL/scripts/...`로 부르고, 산출물은 작업 폴더에 만든다.
+스크립트는 항상 `$SKILL/scripts/...`로 부르고, 산출물은 작업 폴더에 만든다. 내려받은 원문은 `source.html`, 조립 중인 템플릿은 `page.html`로 이름을 나눠 원문이 덮어써지지 않게 한다. `source.html`은 6단계 OG 태그에서 다시 쓴다.
 
 ## 작업 순서
 
 ### 1. 원문과 그림 확보
 
 ```bash
-python3 "$SKILL/scripts/media.py" list page.html
+python3 "$SKILL/scripts/media.py" list source.html
 ```
 
-- 본문 텍스트는 `fetch_content`(readable)로 먼저 읽는다. 읽기 모드 추출은 `<video>`와 `<figure>` 캡션을 놓치는 경우가 많으므로, 그림 정보는 저장한 `page.html`에서 뽑는다.
+- 본문 텍스트는 `fetch_content`(readable)로 먼저 읽는다. 읽기 모드 추출은 `<video>`와 `<figure>` 캡션을 놓치는 경우가 많으므로, 그림 정보는 저장한 `source.html`에서 뽑는다.
 - `list`는 문서 순서대로 그림 라벨, 캡션, 실제 자산 URL을 보여준다. Next.js의 `/_next/image?url=...` 래퍼는 자동으로 벗겨 원본 파일을 가리킨다.
-- 그림이 안 잡히면 `<figure>`가 없는 사이트다. `page.html`의 `video|img` 태그를 직접 보고, 상대 경로가 많으면 `--base "$URL"`을 넘긴다.
+- 그림이 안 잡히면 `<figure>`가 없는 사이트다. `source.html`의 `video|img` 태그를 직접 보고, 상대 경로가 많으면 `--base "$URL"`을 넘긴다.
 
 ```bash
-python3 "$SKILL/scripts/media.py" fetch page.html --out . --max-width 1080 --crf 26
+python3 "$SKILL/scripts/media.py" fetch source.html --out . --max-width 1080 --crf 26
 ```
 
 - 영상과 움직이는 GIF는 무음 H.264로 다시 인코딩하고 `poster_<key>.jpg`를 만든다. 3.6MB·22초 영상이 0.3MB 수준이 된다.
 - 출력된 스니펫을 그대로 쓰면 `{{IMG:...}}`, `{{MEDIA:...}}` 지시자가 맞춰진다.
 - 전체 미디어가 9MB를 넘으면 `--crf 30` 또는 `--max-width 900`으로 다시 뽑는다. 목표는 최종 HTML 12MB 이하, 가능하면 4MB 이하.
+- 두 옵션을 함께 써도 9MB를 넘으면 가장 큰 영상부터 포스터 정지 이미지(`{{IMG:poster_<key>.jpg}}`)로 바꾸고, 캡션 끝에 원문 링크("원문에서 영상 보기")를 단다. 9MB 이하가 될 때까지 반복하고, 정지 이미지로 바꾼 그림은 전달할 때 알린다.
 
 ### 2. 번역
 
@@ -115,13 +116,13 @@ python3 "$SKILL/scripts/check.py" article-ko.html
 
 업로드 직전에 링크 미리보기용 OG 메타 태그를 HTML `<head>`에 넣는다. HTML 한 파일만 올리고, 썸네일 이미지는 따로 만들거나 올리지 않는다.
 
-- 메신저 미리보기는 `og:image`의 **http(s) 절대 URL**만 읽고 data URI는 무시한다. 그래서 원문 `page.html`의 `og:image` URL을 그대로 쓴다(원문 쪽에서 내려가면 썸네일만 빠지고 문서는 영향 없음).
+- 메신저 미리보기는 `og:image`의 **http(s) 절대 URL**만 읽고 data URI는 무시한다. 그래서 원문 `source.html`의 `og:image` URL을 그대로 쓴다(원문 쪽에서 내려가면 썸네일만 빠지고 문서는 영향 없음).
 - 원문 `og:image`가 상대 경로면 원문 URL 기준 절대 URL로 바꿔 `OG_IMG`에 넣는다. 아예 없으면 `og:image` 없이 제목·설명 태그만 넣는다.
 
 ```bash
 FILE=<slug>-ko.html
 BASE="https://s3.preinpost.in/public/article-translate"
-OG_IMG=$(grep -oiE '<meta[^>]+property="og:image"[^>]*>' page.html | grep -oE 'content="[^"]+"' | head -1 | cut -d'"' -f2)
+OG_IMG=$(grep -oiE '<meta[^>]+property="og:image"[^>]*>' source.html | grep -oE 'content="[^"]+"' | head -1 | cut -d'"' -f2)
 python3 - "$FILE" "$BASE" "$OG_IMG" "<번역 제목>" "<한 문장 요약>" <<'PY'
 import sys,html
 f,base,img,t,d=sys.argv[1:];s=open(f,encoding='utf-8').read()
