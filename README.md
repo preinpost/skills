@@ -66,6 +66,23 @@ npx github:preinpost/skills sync orchestrator -m "orchestrator: 규칙 추가"
 - 같은 스킬의 사본들이 서로 다르게 수정됐으면 건너뛴다.
 - 푸시 권한은 SSH 키 또는 `gh auth login`을 쓴다.
 
+### 새로 만든 스킬을 레포에 추가 (add)
+
+로컬 설치 위치에서 직접 만든, 레포에 아직 없는 스킬을 찾아 원본 레포에 커밋·푸시하고 레지스트리에 등록한다. 이후에는 `update`·`sync`로 관리된다.
+
+```bash
+npx github:preinpost/skills add                              # 레포에 없는 로컬 스킬을 TUI로 골라 올림
+npx github:preinpost/skills add pseudocodify                 # 이름으로 (공개/비공개는 TUI로 물음)
+npx github:preinpost/skills add pseudocodify -p              # 비공개 레포로
+npx github:preinpost/skills add ~/work/my-skill              # 설치 위치 밖 폴더도 경로로 올림 (레지스트리 등록은 안 함)
+npx github:preinpost/skills add --check                      # 올릴 수 있는 새 스킬만 확인
+```
+
+- 찾는 범위는 `update`와 같다. 이름 없이 실행하면 다른 도구로 설치한 스킬도 후보에 보이므로 반드시 골라야 한다(터미널이 아니면 이름을 지정해야 한다).
+- 같은 이름의 사본들이 서로 다르면 건너뛴다. 경로로 하나를 지정한다.
+- 공개 레포에 올리면 README 목록 표에 행을 이름순으로 추가한다. 대표 요청 칸은 비워 두므로 필요하면 채운다.
+- 비공개 레포를 받을 수 없으면 중복 여부를 확인할 수 없어 멈춘다. 공개 레포만 기준으로 하려면 `--no-private`를 붙인다.
+
 ### 삭제 (remove)
 
 로컬 스킬 디렉터리를 지우고 `.ms-skills-source.json`의 항목도 뺀다. 원본 레포는 건드리지 않는다.

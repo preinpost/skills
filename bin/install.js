@@ -49,6 +49,7 @@ function scopes(opts) {
 const HELP = `Usage: npx github:preinpost/skills [skill...] [options]
        npx github:preinpost/skills update [skill...] [options]
        npx github:preinpost/skills sync [skill...] [options]
+       npx github:preinpost/skills add [skill|path...] [options]
        npx github:preinpost/skills remove <skill|path...> [options]
        npx github:preinpost/skills list [skill...] [options]
 
@@ -57,6 +58,9 @@ Commands:
                        (-g/-a를 안 주면 현재 디렉터리와 ~ 의 ${Object.keys(TARGETS).join("/")} 를 모두 찾음)
   sync                 설치본을 직접 고친 스킬을 원본 레포에 커밋·푸시하고
                        같은 스킬의 다른 설치 사본에도 반영 (찾는 범위는 update와 같음)
+  add                  로컬에서 새로 만든(레포에 없는) 스킬을 찾아 원본 레포에 커밋·푸시하고
+                       레지스트리에 등록 (찾는 범위는 update와 같음, 인자가 없으면 TUI로 고름.
+                       경로를 주면 그 폴더를 바로 올림. README 목록 표에 행도 추가)
   remove               로컬 스킬 디렉터리를 지우고 레지스트리 항목도 뺌 (원본 레포는 건드리지 않음)
                        (이름이면 update와 같은 범위에서 찾고, 사본이 여럿이면 TUI로 고름.
                         경로를 주면 그 사본만 바로 지움)
@@ -67,8 +71,9 @@ Options:
   -a, --agent <name>   설치 대상: ${Object.keys(TARGETS).join(", ")}, all (반복 가능, 기본: claude,agents)
   -l, --list           설치 가능한 스킬 목록 (설치된 목록은 list 명령)
   -f, --force          이미 있는 스킬 무조건 덮어쓰기 (로컬 수정 포함), remove에서는 로컬 수정본도 삭제
-  -c, --check          update/sync/remove에서 바꾸지 않고 상태만 표시
-  -m, --message <msg>  sync 커밋 메시지 (기본: "sync: <스킬들> (<호스트명>)")
+  -c, --check          update/sync/add/remove에서 바꾸지 않고 상태만 표시
+  -m, --message <msg>  sync/add 커밋 메시지 (기본: "sync: <스킬들> (<호스트명>)")
+  -p, --private        add에서 비공개 레포(${PRIVATE_REPO})로 올림 (기본: 공개)
   -v, --verbose        update에서 최신인 스킬도 사본별로 펼쳐 표시
   -y, --yes            TUI 없이 기본값으로 설치 (remove는 찾은 사본을 고르지 않고 모두 삭제)
       --no-private     비공개 레포(${PRIVATE_REPO})를 받지 않음
@@ -90,6 +95,9 @@ Examples:
   npx github:preinpost/skills update --check      # 업데이트할 것만 확인
   npx github:preinpost/skills sync                # 로컬에서 고친 스킬을 git에 커밋·푸시
   npx github:preinpost/skills sync --check        # 푸시할 것만 확인
+  npx github:preinpost/skills add                 # 레포에 없는 로컬 스킬을 골라 커밋·푸시
+  npx github:preinpost/skills add my-skill -p     # 비공개 레포로
+  npx github:preinpost/skills add --check         # 올릴 수 있는 새 스킬만 확인
   npx github:preinpost/skills remove ko-article-html            # 사본이 여럿이면 골라서 삭제
   npx github:preinpost/skills remove ~/.pi/agent/skills/ko-article-html  # 그 사본만 삭제
   npx github:preinpost/skills remove ko-article-html --check    # 지울 대상만 확인
@@ -348,7 +356,7 @@ function describe(skill) {
 
 function parseArgs(argv) {
   const opts = { skills: [], agents: [], global: false, force: false, list: false, help: false, yes: false, private: true, check: false };
-  if (["update", "sync", "remove", "list"].includes(argv[0])) opts.command = argv.shift();
+  if (["update", "sync", "add", "remove", "list"].includes(argv[0])) opts.command = argv.shift();
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "-g" || a === "--global") opts.global = true;
@@ -359,6 +367,7 @@ function parseArgs(argv) {
     else if (a === "-v" || a === "--verbose") opts.verbose = true;
     else if (a === "-h" || a === "--help") opts.help = true;
     else if (a === "--no-private") opts.private = false;
+    else if (a === "-p" || a === "--private") opts.toPrivate = true;
     else if (a === "-m" || a === "--message") opts.message = argv[++i];
     else if (a === "-a" || a === "--agent") opts.agents.push(...String(argv[++i] || "").split(","));
     else if (a.startsWith("-")) throw new Error(`알 수 없는 옵션: ${a}`);
@@ -497,6 +506,7 @@ async function main() {
 
   if (opts.command === "update") return update(opts, available);
   if (opts.command === "sync") return sync(opts, available);
+  if (opts.command === "add") return add(opts, available, { privateChecked: !!privateRoot || !opts.private });
   if (opts.interactive && !opts.yes) await prompt(opts, available);
   const mode = opts.mode || (opts.force ? "force" : "update");
 
@@ -649,6 +659,137 @@ function sync(opts, available) {
     }
   }
   for (const registry of registries) saveRegistry(registry);
+}
+
+// README 목록 표에 스킬 행을 이름순으로 끼워 넣는다. 표가 없거나 이미 있으면 그대로 둔다.
+function addReadmeRow(repoDir, name, description) {
+  const file = path.join(repoDir, "README.md");
+  if (!fs.existsSync(file)) return false;
+  const lines = fs.readFileSync(file, "utf8").split("\n");
+  const rowRe = /^\| \[`([^`]+)`\]\(\.\/[^)]+\) \|/;
+  const rows = lines.map((l, i) => [l.match(rowRe)?.[1], i]).filter(([n]) => n);
+  if (!rows.length || rows.some(([n]) => n === name)) return false;
+  const after = rows.filter(([n]) => n.localeCompare(name) < 0).pop();
+  const at = after ? after[1] + 1 : rows[0][1];
+  const desc = description.replace(/\|/g, "\\|");
+  lines.splice(at, 0, `| [\`${name}\`](./${name}) | ${desc} | |`);
+  fs.writeFileSync(file, lines.join("\n"));
+  return true;
+}
+
+// 설치 위치에 있지만 원본 레포(공개·비공개)에 없는 스킬을 레포에 새로 올리고 레지스트리에 등록한다.
+// 같은 이름의 사본이 여러 위치에 있으면 내용이 모두 같을 때만 올리고, 다르면 경로로 하나를 고르게 한다.
+async function add(opts, available, { privateChecked }) {
+  if (!privateChecked) {
+    throw new Error(`비공개 레포(${PRIVATE_REPO})를 받을 수 없어 이미 있는 스킬인지 확인할 수 없습니다. 공개 레포만 기준으로 하려면 --no-private를 붙이세요`);
+  }
+  const agents = opts.explicitAgents ? opts.agents : Object.keys(TARGETS);
+  const registries = new Map();
+  const registryOf = (base) => registries.get(base) || registries.set(base, loadRegistry(base)).get(base);
+  const isSkill = (d) => fs.existsSync(path.join(d, "SKILL.md"));
+
+  // name -> [{ dest, registry|null }]
+  const found = new Map();
+  const push = (name, dest, registry) => {
+    if (!found.has(name)) found.set(name, []);
+    if (!found.get(name).some((c) => c.dest === dest)) found.get(name).push({ dest, registry });
+  };
+  const names = opts.skills.filter((a) => !(a.includes("/") || a.includes(path.sep)));
+  const rels = allTargetRels();
+  for (const arg of opts.skills) {
+    if (!(arg.includes("/") || arg.includes(path.sep))) continue;
+    const dest = path.resolve(expandTilde(arg));
+    if (!isSkill(dest)) throw new Error(`SKILL.md가 있는 스킬 폴더가 아닙니다: ${arg}`);
+    const target = rels.find((t) => path.dirname(dest).endsWith(path.sep + path.normalize(t)));
+    // 설치 위치 밖의 폴더는 레포에만 올리고 레지스트리에는 적지 않는다.
+    const registry = target ? registryOf(path.dirname(dest).slice(0, -path.normalize(target).length - 1)) : null;
+    push(path.basename(dest), dest, registry);
+  }
+  if (!opts.skills.length || names.length) {
+    for (const { base, global } of scopes(opts)) for (const dir of targetDirs(base, global, agents)) {
+      if (!fs.existsSync(dir)) continue;
+      for (const name of fs.readdirSync(dir).sort()) {
+        const dest = path.join(dir, name);
+        if (name.startsWith(".") || !isSkill(dest) || (names.length && !names.includes(name))) continue;
+        push(name, dest, registryOf(base));
+      }
+    }
+  }
+
+  const exists = [...found.keys()].filter((n) => available.has(n));
+  for (const n of exists) {
+    if (opts.skills.length) console.log(`= ${n}: 이미 레포에 있음 → 고친 내용은 \`sync\``);
+    found.delete(n);
+  }
+  const notFound = names.filter((n) => !found.has(n) && !exists.includes(n));
+  if (notFound.length) throw new Error(`찾을 수 없는 스킬: ${notFound.join(", ")}`);
+
+  const candidates = [];
+  for (const [name, list] of [...found].sort(([a], [b]) => a.localeCompare(b))) {
+    const variants = new Set(list.map((c) => hashDir(c.dest)));
+    if (variants.size > 1) {
+      console.log(`! ${name}: 사본들의 내용이 서로 달라 건너뜀, 경로로 하나를 지정하세요`);
+      for (const c of list) console.log(`    ${agentOf(c.dest)}  ${shortPath(c.dest)}  (${hashDir(c.dest)})`);
+      continue;
+    }
+    candidates.push({ name, list, hash: [...variants][0], description: describe({ dir: list[0].dest }) });
+  }
+  if (!candidates.length) return console.log("레포에 새로 올릴 로컬 스킬이 없습니다.");
+
+  const show = (c) => {
+    const where = c.list.map((x) => shortPath(x.dest)).join(", ");
+    console.log(`+ ${c.name}  ${c.hash}  (${where})`);
+  };
+  if (opts.check) return candidates.forEach(show);
+
+  // 이름·경로를 주지 않았으면 무엇을 올릴지 반드시 고르게 한다. 다른 도구로 설치한 스킬이 섞일 수 있다.
+  let picked = candidates;
+  if (!opts.skills.length) {
+    if (!(process.stdin.isTTY && process.stdout.isTTY)) {
+      candidates.forEach(show);
+      throw new Error("올릴 스킬 이름을 지정하세요 (예: add my-skill)");
+    }
+    const idx = await select(
+      "레포에 올릴 스킬",
+      candidates.map((c) => ({ label: c.name, hint: c.description.slice(0, 60) })),
+      { multi: true, pickCursor: true },
+    );
+    picked = idx.map((i) => candidates[i]);
+  }
+  let toPrivate = !!opts.toPrivate;
+  if (!opts.toPrivate && !opts.yes && process.stdin.isTTY && process.stdout.isTTY) {
+    const [r] = await select("올릴 레포", [
+      { label: "공개", hint: PUBLIC_REPO },
+      { label: "🔒 비공개", hint: PRIVATE_REPO },
+    ]);
+    toPrivate = r === 1;
+  }
+  const repo = toPrivate ? PRIVATE_REPO : PUBLIC_REPO;
+
+  const dir = cloneForPush(repo);
+  for (const c of picked) {
+    if (fs.existsSync(path.join(dir, c.name))) throw new Error(`${repo}에 이미 ${c.name} 폴더가 있습니다`);
+    copySkill({ dir: c.list[0].dest }, path.join(dir, c.name));
+    if (addReadmeRow(dir, c.name, c.description)) console.log(`  README 목록에 ${c.name} 행 추가 (대표 요청 칸은 비어 있음)`);
+  }
+  git(dir, ["add", "-A"]);
+  const msg = opts.message || `add: ${picked.map((c) => c.name).join(", ")} (${os.hostname()})`;
+  git(dir, ["commit", "-q", "-m", msg]);
+  git(dir, ["push", "-q", "origin", "HEAD"], { stdio: ["ignore", "pipe", "pipe"] });
+  console.log(`✓ ${repo}: ${git(dir, ["log", "-1", "--format=%h %s"])}`);
+
+  // 레포에 올라간 내용의 hash로 각 사본을 등록한다. 이후 update·sync 대상이 된다.
+  const stamp = new Date().toISOString();
+  for (const c of picked) {
+    const pushed = { dir: path.join(dir, c.name), private: toPrivate };
+    const hash = hashDir(pushed.dir);
+    for (const x of c.list) {
+      if (!x.registry) continue;
+      putEntry(x.registry, c.name, x.dest, hash, pushed, stamp, stamp);
+      console.log(`  등록  ${agentOf(x.dest)}  ${shortPath(x.dest)}`);
+    }
+  }
+  for (const registry of registries.values()) saveRegistry(registry);
 }
 
 // 레지스트리(또는 구버전 meta)에 기록된 사본만 지운다. 다른 도구로 설치한 폴더는 건드리지 않는다.
