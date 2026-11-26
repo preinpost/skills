@@ -113,8 +113,29 @@ python3 "$SKILL/scripts/check.py" article-ko.html
    - 접근 가능하면 전달 마지막에 **S3(`article-translate:public/article-translate/`)에 올릴지 바로 물어본다.** 승인 전에는 절대 자동으로 업로드하지 않는다.
 3. 사용자가 승인하면 `Content-Type: text/html`로 업로드하고 공개 URL을 출력한다. 같은 이름이 이미 있으면 덮어쓰기 전에 사용자에게 확인한다.
 
+업로드 직전에 링크 미리보기용 OG 메타 태그를 HTML `<head>`에 넣는다. HTML 한 파일만 올리고, 썸네일 이미지는 따로 만들거나 올리지 않는다.
+
+- 메신저 미리보기는 `og:image`의 **http(s) 절대 URL**만 읽고 data URI는 무시한다. 그래서 원문 `page.html`의 `og:image` URL을 그대로 쓴다(원문 쪽에서 내려가면 썸네일만 빠지고 문서는 영향 없음).
+- 원문 `og:image`가 상대 경로면 원문 URL 기준 절대 URL로 바꿔 `OG_IMG`에 넣는다. 아예 없으면 `og:image` 없이 제목·설명 태그만 넣는다.
+
 ```bash
 FILE=<slug>-ko.html
+BASE="https://s3.preinpost.in/public/article-translate"
+OG_IMG=$(grep -oiE '<meta[^>]+property="og:image"[^>]*>' page.html | grep -oE 'content="[^"]+"' | head -1 | cut -d'"' -f2)
+python3 - "$FILE" "$BASE" "$OG_IMG" "<번역 제목>" "<한 문장 요약>" <<'PY'
+import sys,html
+f,base,img,t,d=sys.argv[1:];s=open(f,encoding='utf-8').read()
+if 'og:title' not in s:
+    e=lambda x:html.escape(x,quote=True)
+    m=(f'<meta property="og:type" content="article"><meta property="og:title" content="{e(t)}">'
+       f'<meta property="og:description" content="{e(d)}"><meta property="og:url" content="{base}/{f}">')
+    if img.startswith('http'):
+        m+=f'<meta property="og:image" content="{e(img)}"><meta name="twitter:card" content="summary_large_image">'
+    i=s.lower().index('<head>')+6; open(f,'w',encoding='utf-8').write(s[:i]+m+s[i:])
+PY
+```
+
+```bash
 DEST="article-translate:public/article-translate/$FILE"
 rclone lsf "$DEST" 2>/dev/null | grep -q . && echo "EXISTS"   # 있으면 덮어쓸지 먼저 확인
 rclone copyto "$FILE" "$DEST" --header-upload "Content-Type: text/html; charset=utf-8"
