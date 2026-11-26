@@ -146,6 +146,21 @@ function hashDir(dir) {
 }
 
 // 구버전 설치기가 스킬 폴더에 남긴 메타. 새 버전은 읽기만 하고 다시 쓰지 않는다.
+// 스킬 폴더 안 파일의 상대 경로 집합 (hashDir과 같은 기준으로 무시)
+function listFiles(dir) {
+  const out = new Set();
+  const walk = (d) => {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      const p = path.join(d, e.name);
+      if (IGNORE.test(p) || (d === dir && e.name === LEGACY_META)) continue;
+      if (e.isDirectory()) walk(p);
+      else if (e.isFile()) out.add(path.relative(dir, p).split(path.sep).join("/"));
+    }
+  };
+  walk(dir);
+  return out;
+}
+
 function readLegacyMeta(dest) {
   try {
     return JSON.parse(fs.readFileSync(path.join(dest, LEGACY_META), "utf8"));
@@ -576,7 +591,7 @@ function cloneForPush(repo) {
 // 설치본 중 레지스트리 hash와 현재 내용이 다른(=로컬에서 고친) 스킬을 원본 레포에 커밋·푸시한다.
 // 원본도 설치 이후 바뀌었으면 양쪽 수정이므로 --force 없이는 건너뛴다.
 // 푸시 후에는 같은 스킬의 다른 설치 사본도 새 내용으로 맞추고 레지스트리 hash를 갱신한다.
-function sync(opts, available) {
+async function sync(opts, available) {
   const agents = opts.explicitAgents ? opts.agents : Object.keys(TARGETS);
   const missing = opts.skills.filter((s) => !available.has(s));
   if (missing.length) throw new Error(`없는 스킬: ${missing.join(", ")}`);
@@ -617,6 +632,26 @@ function sync(opts, available) {
     if (from.saved !== src && !opts.force) {
       console.log(`! ${name}: 원본도 설치 이후 바뀜 (${from.saved} → ${src}), --force로 로컬 내용으로 덮어쓰기`);
       continue;
+    }
+    // 설치본에 없는 파일은 레포에서 지워진다. 사본이 불완전한 경우가 많아 확인을 받는다.
+    const local = listFiles(from.dest);
+    const deleted = [...listFiles(skill.dir)].filter((f) => !local.has(f)).sort();
+    if (deleted.length) {
+      console.log(`! ${name}: 레포에서 파일 ${deleted.length}개가 삭제됨 (출처 ${shortPath(from.dest)}에 없음)`);
+      for (const f of deleted) console.log(`    - ${f}`);
+      if (opts.check) {
+        console.log(`    (실제 sync 때 확인을 받음, --force면 묻지 않음)`);
+      } else if (!opts.force) {
+        if (!(process.stdin.isTTY && process.stdout.isTTY)) {
+          console.log(`    건너뜀: 의도한 삭제면 --force로 다시 실행`);
+          continue;
+        }
+        const [ok] = await select(`${name}: 삭제를 포함해 올릴까요?`, [
+          { label: "건너뛰기", hint: "사본에 빠진 파일이 있으면 update로 먼저 받기" },
+          { label: "삭제 포함해서 올리기" },
+        ]);
+        if (ok !== 1) continue;
+      }
     }
     const repo = skill.private ? PRIVATE_REPO : PUBLIC_REPO;
     console.log(`↑ ${name}${skill.private ? " 🔒" : ""}  ${src} → ${from.cur}`);

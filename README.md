@@ -65,6 +65,7 @@ npx github:preinpost/skills sync orchestrator -m "orchestrator: 규칙 추가"
 - 레지스트리 hash와 현재 내용이 다른 스킬만 올린다. 푸시 후 같은 스킬의 다른 사본(claude/agents/pi/antigravity)도 맞추고 hash를 갱신한다.
 - 원본도 설치 이후 바뀌었으면(양쪽 수정) 건너뛴다. 먼저 `update`로 받거나 `--force`로 로컬 내용을 올린다.
 - 같은 스킬의 사본들이 서로 다르게 수정됐으면 건너뛴다.
+- 설치본에 없는 파일이 있으면(레포에서 지워지게 되면) 목록을 보여 주고 확인을 받는다. 터미널이 아니면 건너뛰고, 의도한 삭제면 `--force`로 올린다.
 - 푸시 권한은 SSH 키 또는 `gh auth login`을 쓴다.
 
 ### 새로 만든 스킬을 레포에 추가 (add)
